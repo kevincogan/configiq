@@ -31,6 +31,57 @@ export async function GET() {
   const timeoutSeconds = gatewayTimeoutSeconds(DEFAULT_TIMEOUT_SECONDS)
 
   try {
+    // A shared ConfigIQ deployment can expose the same AISimulators service
+    // through its combined same-origin /api/catalog proxy. This is useful for
+    // local consumers when the standalone service hostname is being migrated.
+    // Direct service deployments continue to use /systems + /models below.
+    const combinedCatalogUrl = /\/api\/?$/.test(baseUrl)
+      ? `${baseUrl.replace(/\/$/, '')}/catalog`
+      : null
+    if (combinedCatalogUrl) {
+      const catalogRes = await fetch(combinedCatalogUrl, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(timeoutSeconds * 1000),
+      })
+      if (!catalogRes.ok) {
+        return NextResponse.json(
+          {
+            status: 'failed',
+            error: {
+              code: 'AISIM_ERROR',
+              message: `AISimulators catalog fetch failed (${catalogRes.status})`,
+            },
+          },
+          { status: 502, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
+        )
+      }
+      let catalogData: { systems?: unknown[]; models?: unknown[] }
+      try {
+        catalogData = await catalogRes.json()
+      } catch {
+        return NextResponse.json(
+          { status: 'failed', error: { code: 'AISIM_INVALID_RESPONSE', message: 'AISimulators returned non-JSON response' } },
+          { status: 502, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
+        )
+      }
+      return NextResponse.json(
+        {
+          systems: catalogData.systems ?? [],
+          models: catalogData.models ?? [],
+          timeoutSeconds: gatewayTimeoutSeconds(),
+        },
+        {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'public, s-maxage=600, stale-while-revalidate=3600',
+          },
+        },
+      )
+    }
+
     const [systemsRes, modelsRes] = await Promise.all([
       fetch(`${baseUrl}/systems?include=specs`, {
         headers: { Accept: 'application/json' },

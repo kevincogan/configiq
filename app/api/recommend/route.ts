@@ -13,7 +13,7 @@ const ERROR_STATUS_MAP: Record<string, number> = {
   INTERNAL_ERROR: 500,
 }
 
-async function proxyToGateway(body: Record<string, unknown>, include: string): Promise<NextResponse> {
+async function proxyToGateway(body: Record<string, unknown>, include?: string): Promise<NextResponse> {
   const baseUrl = process.env.AISIMULATORS_GATEWAY_URL
   const timeoutSeconds = gatewayTimeoutSeconds()
 
@@ -25,7 +25,10 @@ async function proxyToGateway(body: Record<string, unknown>, include: string): P
   }
 
   try {
-    const res = await fetch(`${baseUrl}/recommend?include=${encodeURIComponent(include)}`, {
+    const upstreamUrl = include
+      ? `${baseUrl}/recommend?include=${encodeURIComponent(include)}`
+      : `${baseUrl}/recommend`
+    const res = await fetch(upstreamUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body: JSON.stringify(body),
@@ -64,9 +67,13 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const include = req.nextUrl.searchParams.get('include')
+    const baseUrl = process.env.AISIMULATORS_GATEWAY_URL ?? ''
 
-    if (include) {
-      return proxyToGateway(body, include)
+    // A /api gateway is another ConfigIQ deployment and already returns the
+    // normalized RecommendResponse. Forward it once instead of parsing that
+    // normalized response as a raw AISimulators service response a second time.
+    if (include || /\/api\/?$/.test(baseUrl)) {
+      return proxyToGateway(body, include ?? undefined)
     }
 
     const validated = RecommendRequestSchema.parse(body)
