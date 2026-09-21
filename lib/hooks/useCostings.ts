@@ -23,6 +23,10 @@ export interface CloudRates {
   reserved_1yr: number | null
   reserved_3yr: number | null
   spot_median: number | null
+  /** Unit of the published hourly values. Older aicostings responses omit it. */
+  rate_basis?: 'gpu_hour' | 'instance_hour'
+  /** Minimum whole-instance GPU count when the rate comes from a VM SKU. */
+  gpus_per_instance?: number | null
 }
 
 export interface HardwareCost {
@@ -33,6 +37,16 @@ export interface HardwareCost {
   source_label: string | null
   source_url: string | null
   source_date: string | null
+  server_configurations?: Record<string, {
+    new_usd: number
+    new_usd_low: number | null
+    new_usd_high: number | null
+    installation_usd: number
+    indicative?: boolean
+    source_label?: string | null
+    source_url?: string | null
+    source_date?: string | null
+  }>
 }
 
 export interface SourceStatus {
@@ -65,6 +79,68 @@ export interface ResolvedCloudRate {
   rate: number
   provider: string // provider.region key, e.g. "aws.us-east-1"
   kind: 'on_demand' | 'spot'
+  gpusPerInstance: number
+}
+
+// Compatibility for the current prototype API, whose AWS and Azure values are
+// instance-hour prices but do not yet identify their unit or topology. The
+// local aicostings implementation now emits these fields explicitly; this map
+// prevents older shared responses from being multiplied as if they were
+// already per-GPU rates.
+const LEGACY_INSTANCE_GPU_COUNTS: Record<string, Partial<Record<'aws' | 'azure', number>>> = {
+  h100_sxm: { aws: 8, azure: 2 },
+  a100_sxm: { aws: 8, azure: 8 },
+}
+
+function positiveRate(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null
+}
+
+export function normalizeCloudRates(
+  systemId: string,
+  providerRegion: string,
+  rates: CloudRates,
+): CloudRates | null {
+  const provider = providerRegion.split('.')[0] as 'aws' | 'azure' | string
+  const explicitGpuCount = typeof rates.gpus_per_instance === 'number' && rates.gpus_per_instance > 0
+    ? Math.ceil(rates.gpus_per_instance)
+    : null
+  const legacyGpuCount = provider === 'aws' || provider === 'azure'
+    ? LEGACY_INSTANCE_GPU_COUNTS[systemId]?.[provider]
+    : undefined
+  // An instance-hour rate cannot be converted safely without its topology.
+  // Reject incomplete explicit records rather than silently treating a whole
+  // multi-GPU VM as a one-GPU offer. Legacy records retain the narrow mappings
+  // above until the shared prototype consistently publishes both fields.
+  if (rates.rate_basis === 'instance_hour' && explicitGpuCount === null) return null
+  const gpusPerInstance = explicitGpuCount ?? legacyGpuCount ?? 1
+  const divisor = rates.rate_basis === 'gpu_hour' ? 1 : gpusPerInstance
+
+  let onDemand = positiveRate(rates.on_demand)
+  let reservedOneYear = positiveRate(rates.reserved_1yr)
+  let reservedThreeYear = positiveRate(rates.reserved_3yr)
+  let spotMedian = positiveRate(rates.spot_median)
+
+  // The prototype Azure scraper historically classified "Low Priority" as
+  // on-demand. Legacy responses cannot distinguish it from the true Linux
+  // consumption meter, so exclude that field until a response declares its
+  // rate basis. The spot/low-priority value remains available and is labelled.
+  if (provider === 'azure' && rates.rate_basis === undefined) onDemand = null
+
+  onDemand = onDemand === null ? null : onDemand / divisor
+  reservedOneYear = reservedOneYear === null ? null : reservedOneYear / divisor
+  reservedThreeYear = reservedThreeYear === null ? null : reservedThreeYear / divisor
+  spotMedian = spotMedian === null ? null : spotMedian / divisor
+  if (onDemand === null && spotMedian === null) return null
+
+  return {
+    on_demand: onDemand,
+    reserved_1yr: reservedOneYear,
+    reserved_3yr: reservedThreeYear,
+    spot_median: spotMedian,
+    rate_basis: 'gpu_hour',
+    gpus_per_instance: gpusPerInstance,
+  }
 }
 
 // Pick a single representative cloud $/hr for a GPU from its per-provider rates.
@@ -80,18 +156,18 @@ export function resolveCloudRate(
 
   if (preferredProvider) {
     const pr = cloudRates[preferredProvider]
-    if (pr?.on_demand != null) return { rate: pr.on_demand, provider: preferredProvider, kind: 'on_demand' }
-    if (pr?.spot_median != null) return { rate: pr.spot_median, provider: preferredProvider, kind: 'spot' }
+    if (pr?.on_demand != null) return { rate: pr.on_demand, provider: preferredProvider, kind: 'on_demand', gpusPerInstance: pr.gpus_per_instance ?? 1 }
+    if (pr?.spot_median != null) return { rate: pr.spot_median, provider: preferredProvider, kind: 'spot', gpusPerInstance: pr.gpus_per_instance ?? 1 }
   }
 
   let cheapestOnDemand: ResolvedCloudRate | null = null
   let cheapestSpot: ResolvedCloudRate | null = null
   for (const [provider, r] of Object.entries(cloudRates)) {
     if (r.on_demand != null && (cheapestOnDemand == null || r.on_demand < cheapestOnDemand.rate)) {
-      cheapestOnDemand = { rate: r.on_demand, provider, kind: 'on_demand' }
+      cheapestOnDemand = { rate: r.on_demand, provider, kind: 'on_demand', gpusPerInstance: r.gpus_per_instance ?? 1 }
     }
     if (r.spot_median != null && (cheapestSpot == null || r.spot_median < cheapestSpot.rate)) {
-      cheapestSpot = { rate: r.spot_median, provider, kind: 'spot' }
+      cheapestSpot = { rate: r.spot_median, provider, kind: 'spot', gpusPerInstance: r.gpus_per_instance ?? 1 }
     }
   }
   return cheapestOnDemand ?? cheapestSpot
@@ -195,7 +271,13 @@ function parseCloudRates(
   for (const sys of systems) {
     const id = sys.id as string
     const rates = sys.cloud_rates as Record<string, CloudRates> | undefined
-    if (id && rates) result.set(id, rates)
+    if (!id || !rates) continue
+    const normalized: Record<string, CloudRates> = {}
+    for (const [providerRegion, providerRates] of Object.entries(rates)) {
+      const value = normalizeCloudRates(id, providerRegion, providerRates)
+      if (value) normalized[providerRegion] = value
+    }
+    if (Object.keys(normalized).length > 0) result.set(id, normalized)
   }
   return result
 }
