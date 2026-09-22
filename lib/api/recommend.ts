@@ -186,6 +186,10 @@ export async function callRecommend(
     top_n: request.top_n ?? 5,
   }
 
+  if (request.max_seq_len != null) externalPayload.max_seq_len = request.max_seq_len
+  if (request.prefill_max_seq_len != null) externalPayload.prefill_max_seq_len = request.prefill_max_seq_len
+  if (request.decode_max_seq_len != null) externalPayload.decode_max_seq_len = request.decode_max_seq_len
+
   if (request.backend_version != null) externalPayload.backend_version = request.backend_version
   if (request.target_request_rate != null) externalPayload.target_request_rate = request.target_request_rate
   if (request.target_concurrency != null) externalPayload.target_concurrency = request.target_concurrency

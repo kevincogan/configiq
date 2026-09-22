@@ -24,12 +24,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, Field, model_validator
 
-from aiconfigurator.cli.api import cli_estimate, cli_recommend
-from aiconfigurator.sdk.common import get_default_models
-from aiconfigurator.sdk.errors import NoFeasibleConfigError
-from aiconfigurator.sdk.memory import estimate_kv_cache
-from aiconfigurator.sdk.utils import get_model_config_from_model_path
-from aiconfigurator_core.sdk.perf_database import load_system_spec
+from aisimulate_core.sdk.common import get_default_models
+from aisimulate_core.sdk.errors import NoFeasibleConfigError
+from aisimulate_core.sdk.memory import estimate_kv_cache
+from aisimulate_core.sdk.perf_database import load_system_spec
+from aisimulate_core.sdk.utils import get_model_config_from_model_path
 
 # Optional observability + MCP, provided by the shared configiq package
 # (configiq[otel,mcp]). Kept out of the base install/container because otel
@@ -61,6 +60,9 @@ class RecommendRequest(BaseModel):
     target_concurrency: float | None = Field(default=None, examples=[32], description="Target concurrent users.")
     isl: int = Field(default=4000, description="Input sequence length.")
     osl: int = Field(default=1000, description="Output sequence length.")
+    max_seq_len: int | None = Field(default=None, gt=0, description="Maximum sequence length for KV cache allocation. Defaults to isl + osl.")
+    prefill_max_seq_len: int | None = Field(default=None, gt=0, description="Optional maximum sequence length for disaggregated prefill workers.")
+    decode_max_seq_len: int | None = Field(default=None, gt=0, description="Optional maximum sequence length for disaggregated decode workers.")
     ttft: float = Field(default=2000.0, description="TTFT target (ms).")
     tpot: float = Field(default=30.0, description="TPOT target (ms).")
     request_latency: float | None = Field(default=None, description="E2E latency target (ms).")
@@ -400,6 +402,194 @@ def _inclusive_tpot(ttft: float | None, tpot: float | None, osl: int) -> float |
     return (ttft + tpot * (osl - 1)) / osl
 
 
+def _aisimulate_runner_factory():
+    from aisimulate.stack import resolve_runner_factory
+
+    return resolve_runner_factory("engine")
+
+
+def _aisimulate_recommendation_config(req: RecommendRequest) -> dict[str, Any]:
+    from aisimulate.config.cli import CoreRecommendationConfig
+
+    context_length = req.max_seq_len or req.isl + req.osl
+    load = (
+        {"type": "constant_rate", "requests_per_second": req.target_request_rate}
+        if req.target_request_rate is not None
+        else {"type": "concurrency", "concurrency": int(req.target_concurrency or 1)}
+    )
+    engine: dict[str, Any] = {
+        "model": req.model_path,
+        "hardware": req.system,
+        "backend": req.backend,
+        "backend_version": req.backend_version,
+        "database_mode": req.database_mode,
+        "context_length": context_length,
+        "mode": {"choices": ["aggregated", "disaggregated"]},
+        "workers": {
+            "prefill": {"context_length": req.prefill_max_seq_len} if req.prefill_max_seq_len else {},
+            "decode": {"context_length": req.decode_max_seq_len} if req.decode_max_seq_len else {},
+        },
+    }
+    raw: dict[str, Any] = {
+        "traffic": {
+            "source": {"type": "synthetic", "input_tokens": req.isl, "output_tokens": req.osl},
+            "load": load,
+            "stop": {"requests": 1},
+        },
+        "engine": engine,
+        "evaluation": {
+            "sla": (
+                {"e2e_ms": req.request_latency}
+                if req.request_latency is not None
+                else {"ttft_ms": req.ttft, "itl_ms": req.tpot}
+            ),
+        },
+        "optimization": {"target": "min_gpus", "constraints": {"max_candidate_gpus": 1024}},
+        "optimizer": {"max_trials": 320, "parallelism": 16},
+    }
+    return CoreRecommendationConfig.model_validate(raw).model_dump(mode="python", exclude_none=True)
+
+
+def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
+    from aisimulate.config.cli import CorePredictionConfig
+
+    def worker(role: str) -> dict[str, Any]:
+        if role == "agg":
+            tp, pp, dp, moe_tp, moe_ep, batch = (
+                req.tp_size, req.pp_size, req.attention_dp_size, req.moe_tp_size, req.moe_ep_size, req.batch_size
+            )
+            context = req.max_seq_len or req.isl + req.osl
+        else:
+            tp = req.prefill_tp_size if role == "prefill" else req.decode_tp_size
+            pp = req.prefill_pp_size if role == "prefill" else req.decode_pp_size
+            dp = req.attention_dp_size
+            moe_tp = req.prefill_moe_tp_size if role == "prefill" else req.decode_moe_tp_size
+            moe_ep = req.prefill_moe_ep_size if role == "prefill" else req.decode_moe_ep_size
+            batch = req.prefill_batch_size if role == "prefill" else req.decode_batch_size
+            context = (
+                req.prefill_max_seq_len if role == "prefill" else req.decode_max_seq_len
+            ) or req.max_seq_len or req.isl + req.osl
+        return {
+            "context_length": context,
+            "parallelism": {
+                "replicas": (req.prefill_num_workers if role == "prefill" else req.decode_num_workers) or 1,
+                "tensor": tp or req.tp_size,
+                "pipeline": pp or req.pp_size,
+                "attention_data": dp or req.attention_dp_size,
+                "moe_tensor": moe_tp or 1,
+                "moe_expert": moe_ep or 1,
+            },
+            "scheduler": {"max_sequences": batch or req.batch_size},
+        }
+
+    mode = "disaggregated" if req.mode == "disagg" else "aggregated"
+    workers = {"prefill": worker("prefill"), "decode": worker("decode")} if req.mode == "disagg" else {
+        "aggregated": worker("agg")
+    }
+    raw = {
+        "traffic": {
+            "source": {"type": "synthetic", "input_tokens": req.isl, "output_tokens": req.osl},
+            "load": {"type": "concurrency", "concurrency": req.batch_size},
+            "stop": {"requests": 1},
+        },
+        "engine": {
+            "mode": mode,
+            "model": req.model_path,
+            "hardware": req.system,
+            "backend": req.backend,
+            "backend_version": req.backend_version,
+            "database_mode": req.database_mode,
+            "context_length": req.max_seq_len or req.isl + req.osl,
+            "workers": workers,
+        },
+    }
+    return CorePredictionConfig.model_validate(raw).model_dump(mode="python", exclude_none=True)
+
+
+def _metric(metrics: dict[str, Any], *names: str) -> float | None:
+    for name in names:
+        value = metrics.get(name)
+        if value is not None:
+            return _coerce_float(value)
+    return None
+
+
+def _aisimulate_worker_config(raw: dict[str, Any], role: str, req: RecommendRequest) -> WorkerConfig | None:
+    worker = (raw.get("engine") or {}).get("workers", {}).get(role)
+    if not isinstance(worker, dict):
+        return None
+    parallel = worker.get("parallelism") or {}
+    scheduler = worker.get("scheduler") or {}
+    return WorkerConfig(
+        tp=parallel.get("tensor"), pp=parallel.get("pipeline"), dp=parallel.get("attention_data"),
+        moe_tp=parallel.get("moe_tensor"), moe_ep=parallel.get("moe_expert"),
+        num_workers=parallel.get("replicas"), batch_size=scheduler.get("max_sequences"),
+        backend_version=(raw.get("engine") or {}).get("backend_version") or req.backend_version,
+    )
+
+
+def _aisimulate_candidate_config(candidate: Any, req: RecommendRequest) -> RecommendConfig:
+    prediction = candidate.prediction_config or {}
+    engine = prediction.get("engine") or {}
+    workers = engine.get("workers") or {}
+    metrics = candidate.metrics or {}
+    mode = "disagg" if engine.get("mode") == "disaggregated" else "agg"
+    agg = workers.get("aggregated") or {}
+    parallel = agg.get("parallelism") or {}
+    config = RecommendConfig(
+        total_gpus_needed=candidate.used_gpus,
+        replicas_needed=parallel.get("replicas"),
+        num_total_gpus=candidate.used_gpus,
+        tp=parallel.get("tensor"), pp=parallel.get("pipeline"), dp=parallel.get("attention_data"),
+        moe_tp=parallel.get("moe_tensor"), moe_ep=parallel.get("moe_expert"),
+        bs=(agg.get("scheduler") or {}).get("max_sequences"),
+        ttft=_metric(metrics, "ttft_ms", "mean_ttft_ms"),
+        tpot=_metric(metrics, "tpot_ms", "mean_tpot_ms", "itl_ms"),
+        request_latency=_metric(metrics, "e2e_latency_ms", "mean_e2e_latency_ms"),
+        tokens_per_second=_metric(metrics, "output_throughput_tok_s", "tokens_per_second"),
+        tokens_per_second_per_gpu=_metric(metrics, "output_throughput_tok_s_per_gpu"),
+        model=engine.get("model", req.model_path), system=engine.get("hardware", req.system),
+        backend=engine.get("backend", req.backend), backend_version=engine.get("backend_version", req.backend_version),
+        mode=mode,
+    )
+    if mode == "disagg":
+        config.prefill_config = _aisimulate_worker_config(prediction, "prefill", req)
+        config.decode_config = _aisimulate_worker_config(prediction, "decode", req)
+    return config
+
+
+def _run_aisimulate_recommendation(req: RecommendRequest):
+    from aisimulate.config.cli import CoreRecommendationConfig
+    from aisimulate.recommend import run_recommendation
+
+    if req.model_config_data:
+        raise ValueError("model_config is not supported by the aisimulate recommendation interface")
+    return run_recommendation(
+        CoreRecommendationConfig.model_validate(_aisimulate_recommendation_config(req)),
+        stack="engine",
+        runner_factory=_aisimulate_runner_factory(),
+        show_progress=False,
+    )
+
+
+def _run_aisimulate_prediction(req: EstimateRequest, include: set[str]):
+    from aisimulate.config.cli import CorePredictionConfig
+    from aisimulate.predict import run_prediction
+    from aisimulate.sweeper.replay import ReplayOutputRequirements
+
+    if req.model_config_data:
+        raise ValueError("model_config is not supported by the aisimulate prediction interface")
+    return run_prediction(
+        CorePredictionConfig.model_validate(_aisimulate_prediction_config(req)),
+        stack="engine",
+        runner_factory=_aisimulate_runner_factory(),
+        output_requirements=ReplayOutputRequirements(
+            include_raw_report=True,
+            capture_memory_diagnostics="memory" in include,
+        ),
+    )
+
+
 def _worker_config_from_row(row: pd.Series, prefix: str, req: RecommendRequest) -> WorkerConfig | None:
     def g(col: str) -> Any:
         v = row.get(f"({prefix}){col}")
@@ -642,75 +832,44 @@ def post_recommend(
 ):
     """Find optimal GPU configuration for a workload."""
     try:
-        with _with_model_config(req.model_path, req.model_config_data) as effective_path:
-            result = cli_recommend(
-                model_path=effective_path,
-                system=req.system,
-                backend=req.backend,
-                backend_version=req.backend_version,
-                target_request_rate=req.target_request_rate,
-                target_concurrency=req.target_concurrency,
-                database_mode=req.database_mode,
-                isl=req.isl,
-                osl=req.osl,
-                ttft=req.ttft,
-                tpot=req.tpot,
-                request_latency=req.request_latency,
-                prefix=req.prefix,
-                top_n=req.top_n,
-            )
+        result = _run_aisimulate_recommendation(req)
     except (ValueError, AttributeError, Exception) as e:
         _common_error_handler(e, "recommend", req.model_path, req.backend, req.system)
 
-    best = result.best_configs.get(result.chosen_exp)
-    chosen = result.chosen_exp
-
-    if best is None or best.empty:
+    candidates = result.selected_candidates[: req.top_n]
+    if not candidates:
         raise HTTPException(status_code=422, detail="No configuration meets the specified requirements.")
 
+    configs = [_aisimulate_candidate_config(candidate, req) for candidate in candidates]
     includes = _parse_include(include)
-    want_config = "config" in includes
-    want_memory = "memory" in includes
-    is_disagg = chosen.startswith("disagg") if chosen else False
-
-    configs = []
-    with _with_model_config(req.model_path, req.model_config_data) as effective_path:
-        for _, row in best.head(req.top_n).iterrows():
-            cfg = _row_to_config(row, req)
-            if req.inclusive_tpot:
-                cfg.tpot = _inclusive_tpot(cfg.ttft, cfg.tpot, req.osl)
-            backend = cfg.backend or req.backend
-            bv = cfg.backend_version or req.backend_version
-
-            if is_disagg:
-                if want_memory:
-                    for worker in [cfg.prefill_config, cfg.decode_config]:
-                        if worker and worker.tp:
-                            worker.memory_breakdown = _build_memory_breakdown(
-                                effective_path, req.system, backend,
-                                bv or worker.backend_version,
-                                worker.tp or 1, worker.pp or 1,
-                                req.isl, req.osl, worker.num_workers or 1,
-                                worker.gemm if worker.gemm and worker.gemm != "half" else None,
-                                worker.kvcache if worker.kvcache and worker.kvcache != "half" else None,
-                                worker.moe_tp, worker.moe_ep,
-                            )
-            else:
-                tp = cfg.tp or 1
-                concurrency = cfg.concurrency or 128
-                if want_config:
-                    cfg.serving_config = _build_serving_config(
-                        backend, tp, req.isl, req.osl, concurrency, cfg.gemm, req.prefix,
+    for cfg in configs:
+        if req.inclusive_tpot:
+            cfg.tpot = _inclusive_tpot(cfg.ttft, cfg.tpot, req.osl)
+        if cfg.mode == "disagg":
+            for worker, context_length in (
+                (cfg.prefill_config, req.prefill_max_seq_len or req.max_seq_len),
+                (cfg.decode_config, req.decode_max_seq_len or req.max_seq_len),
+            ):
+                if worker and worker.tp and "memory" in includes:
+                    worker.memory_breakdown = _build_memory_breakdown(
+                        req.model_path, req.system, req.backend, worker.backend_version,
+                        worker.tp, worker.pp or 1, req.isl, req.osl, worker.num_workers or 1,
+                        max_seq_len=context_length,
                     )
-                if want_memory:
-                    cfg.memory_breakdown = _build_memory_breakdown(
-                        effective_path, req.system, backend, bv,
-                        tp, cfg.pp or 1, req.isl, req.osl, concurrency,
-                        cfg.gemm, cfg.kvcache, cfg.moe_tp, cfg.moe_ep,
-                    )
-            configs.append(cfg)
-
-    return RecommendResponse(configs=configs, chosen_mode=chosen)
+        else:
+            if "config" in includes:
+                cfg.serving_config = _build_serving_config(
+                    req.backend, cfg.tp or req.tp_size, req.isl, req.osl,
+                    cfg.bs or req.target_concurrency or 1, cfg.gemm, req.prefix,
+                    max_seq_len=req.max_seq_len,
+                )
+            if "memory" in includes:
+                cfg.memory_breakdown = _build_memory_breakdown(
+                    req.model_path, req.system, req.backend, cfg.backend_version,
+                    cfg.tp or req.tp_size, cfg.pp or req.pp_size, req.isl, req.osl,
+                    cfg.bs or req.target_concurrency or 1, max_seq_len=req.max_seq_len,
+                )
+    return RecommendResponse(configs=configs, chosen_mode=configs[0].mode)
 
 
 @app.post("/estimate")
@@ -742,88 +901,41 @@ def post_estimate(
     d_moe_ep = req.decode_moe_ep_size or req.moe_ep_size
 
     try:
-        with _with_model_config(req.model_path, req.model_config_data) as effective_path:
-            if is_disagg:
-                result = cli_estimate(
-                    effective_path,
-                    system_name=req.system,
-                    decode_system_name=req.decode_system,
-                    backend_name=req.backend,
-                    backend_version=req.backend_version,
-                    database_mode=req.database_mode,
-                    mode="disagg",
-                    isl=req.isl,
-                    osl=req.osl,
-                    prefill_tp_size=p_tp,
-                    prefill_pp_size=p_pp,
-                    prefill_moe_tp_size=p_moe_tp,
-                    prefill_moe_ep_size=p_moe_ep,
-                    prefill_batch_size=p_bs,
-                    prefill_num_workers=p_workers,
-                    decode_tp_size=d_tp,
-                    decode_pp_size=d_pp,
-                    decode_moe_tp_size=d_moe_tp,
-                    decode_moe_ep_size=d_moe_ep,
-                    decode_batch_size=d_bs,
-                    decode_num_workers=d_workers,
-                    gemm_quant_mode=req.gemm_quant_mode,
-                    kvcache_quant_mode=req.kvcache_quant_mode,
-                    fmha_quant_mode=req.fmha_quant_mode,
-                )
-            else:
-                result = cli_estimate(
-                    effective_path,
-                    system_name=req.system,
-                    backend_name=req.backend,
-                    backend_version=req.backend_version,
-                    database_mode=req.database_mode,
-                    isl=req.isl,
-                    osl=req.osl,
-                    batch_size=req.batch_size,
-                    tp_size=req.tp_size,
-                    pp_size=req.pp_size,
-                    attention_dp_size=req.attention_dp_size,
-                    moe_tp_size=req.moe_tp_size,
-                    moe_ep_size=req.moe_ep_size,
-                    gemm_quant_mode=req.gemm_quant_mode,
-                    kvcache_quant_mode=req.kvcache_quant_mode,
-                    fmha_quant_mode=req.fmha_quant_mode,
-                )
+        prediction = _run_aisimulate_prediction(req, _parse_include(include))
     except (ValueError, AttributeError, Exception) as e:
         _common_error_handler(e, "estimate", req.model_path, req.backend, req.system)
 
-    raw = result.raw
     includes = _parse_include(include)
 
-    tpot = result.tpot
+    tpot = _metric(prediction.summary, "tpot_ms", "mean_tpot_ms", "itl_ms")
     if req.inclusive_tpot:
-        tpot = _inclusive_tpot(result.ttft, tpot, req.osl)
+        tpot = _inclusive_tpot(_metric(prediction.summary, "ttft_ms", "mean_ttft_ms"), tpot, req.osl)
 
     resp = EstimateResponse(
-        ttft=result.ttft,
+        ttft=_metric(prediction.summary, "ttft_ms", "mean_ttft_ms") or 0.0,
         tpot=tpot,
-        request_latency=_coerce_float(raw.get("request_latency")),
-        tokens_per_second=_coerce_float(raw.get("tokens/s")),
-        tokens_per_second_per_gpu=_coerce_float(raw.get("tokens/s/gpu")),
-        tokens_per_second_per_user=_coerce_float(raw.get("tokens/s/user")),
-        memory=_coerce_float(raw.get("memory")),
-        concurrency=_coerce_int(raw.get("bs")),
-        tp=None if is_disagg else (_coerce_int(raw.get("tp")) or req.tp_size),
-        pp=None if is_disagg else (_coerce_int(raw.get("pp")) or req.pp_size),
-        dp=None if is_disagg else _coerce_int(raw.get("dp")),
-        system=raw.get("system", req.system),
-        backend=raw.get("backend", req.backend),
-        backend_version=raw.get("version", req.backend_version),
-        gemm=raw.get("gemm"),
-        kvcache=raw.get("kvcache"),
-        power_w=result.power_w,
+        request_latency=_metric(prediction.summary, "e2e_latency_ms", "mean_e2e_latency_ms"),
+        tokens_per_second=_metric(prediction.summary, "output_throughput_tok_s", "tokens_per_second"),
+        tokens_per_second_per_gpu=_metric(prediction.summary, "output_throughput_tok_s_per_gpu"),
+        tokens_per_second_per_user=_metric(prediction.summary, "output_throughput_tok_s_per_user"),
+        memory=None,
+        concurrency=req.batch_size,
+        tp=None if is_disagg else req.tp_size,
+        pp=None if is_disagg else req.pp_size,
+        dp=None if is_disagg else req.attention_dp_size,
+        system=req.system,
+        backend=req.backend,
+        backend_version=req.backend_version,
+        gemm=req.gemm_quant_mode,
+        kvcache=req.kvcache_quant_mode,
+        power_w=_metric(prediction.summary, "power_w"),
         mode=req.mode,
     )
 
     if is_disagg:
         # (p)/(d)memory are per-GPU peaks; the single figure is the worst case.
-        p_mem = _coerce_float(raw.get("(p)memory"))
-        d_mem = _coerce_float(raw.get("(d)memory"))
+        p_mem = None
+        d_mem = None
         phase_mems = [m for m in (p_mem, d_mem) if m is not None]
         if phase_mems:
             resp.memory = max(phase_mems)
@@ -857,13 +969,15 @@ def post_estimate(
                             worker.tp, worker.pp or 1, req.isl, req.osl,
                             worker.batch_size or req.batch_size,
                             gemm_q, kv_q, worker.moe_tp, worker.moe_ep,
+                            max_seq_len=(req.prefill_max_seq_len if worker is resp.prefill_config else req.decode_max_seq_len)
+                            or req.max_seq_len,
                         )
         return resp
 
     if "config" in includes:
         resp.serving_config = _build_serving_config(
             resp.backend or req.backend, req.tp_size, req.isl, req.osl,
-            req.batch_size, resp.gemm, 0,
+            req.batch_size, resp.gemm, 0, max_seq_len=req.max_seq_len,
         )
 
     if "memory" in includes:
@@ -873,7 +987,7 @@ def post_estimate(
                 req.tp_size, req.pp_size, req.isl, req.osl, req.batch_size,
                 req.gemm_quant_mode if req.gemm_quant_mode and req.gemm_quant_mode != "half" else None,
                 req.kvcache_quant_mode if req.kvcache_quant_mode and req.kvcache_quant_mode != "half" else None,
-                req.moe_tp_size, req.moe_ep_size,
+                req.moe_tp_size, req.moe_ep_size, max_seq_len=req.max_seq_len,
             )
 
     return resp

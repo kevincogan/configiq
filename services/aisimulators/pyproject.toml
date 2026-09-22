@@ -15,8 +15,8 @@ dependencies = [
     # Shared ConfigIQ utilities (GPU systems catalog, observability, MCP wiring).
     "configiq",
     # aisimulate SDK: a single unified wheel that bundles the Rust-compiled core
-    # and provides the aiconfigurator / aiconfigurator_core compatibility
-    # namespaces this service still imports. Consumed as a wheel published by the
+    # and exposes the aisimulate / aisimulate_core APIs this service imports. Consumed
+    # as a wheel published by the
     # Red Hat fork's GitHub Release — NOT vendored, and not on PyPI. Referenced by
     # exact download URL (not name==version) on purpose: a direct URL forces pip
     # to install this exact artifact. Bump the URL (version + build hash live in
@@ -66,4 +66,4 @@ target-version = "py311"
 ignore = ["BLE001"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["aiconfigurator", "aiconfigurator_core", "tools"]
+known-first-party = ["aisimulate", "aisimulate_core", "tools"]

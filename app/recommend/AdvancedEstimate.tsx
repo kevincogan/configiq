@@ -231,6 +231,9 @@ export default function AdvancedEstimate() {
   const [gpuSystem, setGpuSystem] = React.useState(() => getAppConfig().defaultSystem);
   const [isl, setIsl] = React.useState(2048);
   const [osl, setOsl] = React.useState(128);
+  const [maxSeqLen, setMaxSeqLen] = React.useState<number | null>(null);
+  const [prefillMaxSeqLen, setPrefillMaxSeqLen] = React.useState<number | null>(null);
+  const [decodeMaxSeqLen, setDecodeMaxSeqLen] = React.useState<number | null>(null);
   const [ttft, setTtft] = React.useState(1000);
   const [tpot, setTpot] = React.useState(30);
   const [targetConcurrency, setTargetConcurrency] = React.useState(1);
@@ -249,6 +252,9 @@ export default function AdvancedEstimate() {
 
   const [islInput, setIslInput] = React.useState('2048');
   const [oslInput, setOslInput] = React.useState('128');
+  const [maxSeqLenInput, setMaxSeqLenInput] = React.useState('');
+  const [prefillMaxSeqLenInput, setPrefillMaxSeqLenInput] = React.useState('');
+  const [decodeMaxSeqLenInput, setDecodeMaxSeqLenInput] = React.useState('');
   const [ttftInput, setTtftInput] = React.useState('1000');
   const [tpotInput, setTpotInput] = React.useState('30');
   const [concurrencyInput, setConcurrencyInput] = React.useState('1');
@@ -261,6 +267,17 @@ export default function AdvancedEstimate() {
   const invalidTpot = tpotInput === '' || !Number.isFinite(Number(tpotInput)) || Number(tpotInput) <= 0;
   const invalidConcurrency = concurrencyInput === '' || parseInt(concurrencyInput, 10) < 1;
   const invalidLatency = latencyInput !== '' && (!Number.isFinite(Number(latencyInput)) || Number(latencyInput) <= 0);
+
+  const handleSequenceLengthChange = (
+    raw: string,
+    setInput: (value: string) => void,
+    setValue: (value: number | null) => void,
+  ) => {
+    const digits = raw.replace(/[^0-9]/g, '');
+    setInput(digits);
+    const n = parseInt(digits, 10);
+    setValue(Number.isFinite(n) && n > 0 ? n : null);
+  };
 
   const handleIslChange = (raw: string) => {
     const digits = raw.replace(/[^0-9]/g, '');
@@ -364,12 +381,18 @@ export default function AdvancedEstimate() {
   const resetToDefaults = () => {
     applyPreset(DEFAULT_WORKLOAD);
     setRequestLatency(null); setLatencyInput('');
+    setMaxSeqLen(null); setMaxSeqLenInput('');
+    setPrefillMaxSeqLen(null); setPrefillMaxSeqLenInput('');
+    setDecodeMaxSeqLen(null); setDecodeMaxSeqLenInput('');
   };
 
   const handleCalculate = () => {
     startSizing({
       model_path: model, system: gpuSystem, isl, osl, ttft,
       tpot, target_concurrency: targetConcurrency, prefix,
+      ...(maxSeqLen != null ? { max_seq_len: maxSeqLen } : {}),
+      ...(prefillMaxSeqLen != null ? { prefill_max_seq_len: prefillMaxSeqLen } : {}),
+      ...(decodeMaxSeqLen != null ? { decode_max_seq_len: decodeMaxSeqLen } : {}),
       ...(requestLatency != null ? { request_latency: requestLatency } : {}),
       backend: inferenceBackend,
       // Send the HF config for models AISimulators can't resolve from its catalog.
@@ -541,6 +564,51 @@ export default function AdvancedEstimate() {
                   placeholder="Auto"
                   min={1}
                 />
+              </div>
+            </div>
+
+            <div style={{ marginTop: 16 }}>
+              <div className={styles.fieldLabel}>Context window sizing</div>
+              <div style={{ fontSize: 13, color: '#3c3f42', margin: '4px 0 12px' }}>
+                Constrains KV cache allocation. Default is input + output sequence length (not the model&apos;s max_position_embeddings). Set lower to model serving at specific context tiers.
+              </div>
+              <div className={styles.paramGrid} style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+                <div>
+                  <label className={styles.fieldLabel}>Max sequence length (tokens)</label>
+                  <input
+                    type="number"
+                    className={styles.paramInput}
+                    value={maxSeqLenInput}
+                    onChange={e => handleSequenceLengthChange(e.target.value, setMaxSeqLenInput, setMaxSeqLen)}
+                    min={1}
+                    placeholder="ISL + OSL"
+                  />
+                </div>
+                <div>
+                  <label className={styles.fieldLabel}>Prefill max sequence length (tokens)</label>
+                  <input
+                    type="number"
+                    className={styles.paramInput}
+                    value={prefillMaxSeqLenInput}
+                    onChange={e => handleSequenceLengthChange(e.target.value, setPrefillMaxSeqLenInput, setPrefillMaxSeqLen)}
+                    min={1}
+                    placeholder="Optional override"
+                  />
+                </div>
+                <div>
+                  <label className={styles.fieldLabel}>Decode max sequence length (tokens)</label>
+                  <input
+                    type="number"
+                    className={styles.paramInput}
+                    value={decodeMaxSeqLenInput}
+                    onChange={e => handleSequenceLengthChange(e.target.value, setDecodeMaxSeqLenInput, setDecodeMaxSeqLen)}
+                    min={1}
+                    placeholder="Optional override"
+                  />
+                </div>
+              </div>
+              <div style={{ fontSize: 13, color: '#3c3f42', marginTop: 8 }}>
+                Prefill and decode values apply to disaggregated workers and override the common value when set.
               </div>
             </div>
           </div>
