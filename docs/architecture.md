@@ -9,9 +9,10 @@ Browser → nginx → Next.js container → AISimulators / AICostings gateways
 ```
 
 The Next.js application runs in a Podman container managed by systemd. nginx
-terminates TLS and proxies both browser traffic and the server-side gateway
-requests. GPU recommendations and memory estimation run in the separate
-AISimulators service; pricing data comes from AICostings.
+terminates TLS and forwards browser traffic to the Next.js container. The
+Next.js API routes make server-side requests to AISimulators and AICostings.
+GPU recommendations and memory estimation run in the separate AISimulators
+service; pricing data comes from AICostings.
 
 ## Key principle: math is isolated
 
