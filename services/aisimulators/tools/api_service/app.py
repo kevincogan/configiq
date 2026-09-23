@@ -222,6 +222,7 @@ class RecommendConfig(BaseModel):
     # Disagg detail (present for disagg results)
     prefill_config: WorkerConfig | None = None
     decode_config: WorkerConfig | None = None
+    mode: str = "agg"
 
 
 class RecommendResponse(BaseModel):
@@ -447,7 +448,13 @@ def _aisimulate_recommendation_config(req: RecommendRequest) -> dict[str, Any]:
                 else {"ttft_ms": req.ttft, "itl_ms": req.tpot}
             ),
         },
-        "optimization": {"target": "min_gpus", "constraints": {"max_candidate_gpus": 1024}},
+        "optimization": {
+            "target": "min_gpus",
+            "constraints": {
+                "max_candidate_gpus": 1024,
+                **({"min_goodput_rps": req.target_request_rate} if req.target_request_rate is not None else {}),
+            },
+        },
         "optimizer": {"max_trials": 320, "parallelism": 16},
     }
     return CoreRecommendationConfig.model_validate(raw).model_dump(mode="python", exclude_none=True)
@@ -525,6 +532,7 @@ def _aisimulate_worker_config(raw: dict[str, Any], role: str, req: RecommendRequ
     scheduler = worker.get("scheduler") or {}
     return WorkerConfig(
         tp=parallel.get("tensor"), pp=parallel.get("pipeline"), dp=parallel.get("attention_data"),
+        cp=1,
         moe_tp=parallel.get("moe_tensor"), moe_ep=parallel.get("moe_expert"),
         num_workers=parallel.get("replicas"), batch_size=scheduler.get("max_sequences"),
         backend_version=(raw.get("engine") or {}).get("backend_version") or req.backend_version,
@@ -553,6 +561,7 @@ def _aisimulate_candidate_config(candidate: Any, req: RecommendRequest) -> Recom
         tokens_per_second_per_gpu=_metric(metrics, "output_throughput_tok_s_per_gpu"),
         model=engine.get("model", req.model_path), system=engine.get("hardware", req.system),
         backend=engine.get("backend", req.backend), backend_version=engine.get("backend_version", req.backend_version),
+        mode=mode,
     )
     if mode == "disagg":
         config.prefill_config = _aisimulate_worker_config(prediction, "prefill", req)
@@ -861,14 +870,14 @@ def post_recommend(
         else:
             if "config" in includes:
                 cfg.serving_config = _build_serving_config(
-                    req.backend, cfg.tp or req.tp_size, req.isl, req.osl,
+                    req.backend, cfg.tp or 1, req.isl, req.osl,
                     cfg.bs or req.target_concurrency or 1, cfg.gemm, req.prefix,
                     max_seq_len=req.max_seq_len,
                 )
             if "memory" in includes:
                 cfg.memory_breakdown = _build_memory_breakdown(
                     req.model_path, req.system, req.backend, cfg.backend_version,
-                    cfg.tp or req.tp_size, cfg.pp or req.pp_size, req.isl, req.osl,
+                    cfg.tp or 1, cfg.pp or 1, req.isl, req.osl,
                     cfg.bs or req.target_concurrency or 1, max_seq_len=req.max_seq_len,
                 )
     chosen_mode = "disagg" if configs[0].prefill_config is not None else "agg"

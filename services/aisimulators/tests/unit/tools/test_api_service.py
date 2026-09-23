@@ -966,7 +966,7 @@ class TestEstimate:
         assert resp.status_code == 500
 
     @patch("tools.api_service.app._run_aisimulate_prediction")
-    def test_model_config_accepted(self, mock_estimate):
+    def test_model_config_rejected(self, mock_estimate):
         mock_estimate.side_effect = ValueError("model_config is not supported")
         body = {**VALID_ESTIMATE_BODY, "model_config": {"hidden_size": 8192, "architectures": ["LlamaForCausalLM"]}}
         resp = client.post("/estimate", json=body)
@@ -997,7 +997,7 @@ class TestEstimate:
 class TestModelConfigPassthrough:
 
     @patch("tools.api_service.app._run_aisimulate_recommendation")
-    def test_recommend_accepts_model_config(self, mock_recommend):
+    def test_recommend_model_config_rejected(self, mock_recommend):
         mock_recommend.side_effect = ValueError("model_config is not supported")
         body = {**VALID_RECOMMEND_BODY, "model_config": {"hidden_size": 8192, "architectures": ["LlamaForCausalLM"]}}
         resp = client.post("/recommend", json=body)
@@ -1012,7 +1012,7 @@ class TestModelConfigPassthrough:
         assert resp.status_code == 200
 
     @patch("tools.api_service.app._run_aisimulate_recommendation")
-    def test_empty_model_config_falls_back_to_hf_resolution(self, mock_recommend):
+    def test_empty_model_config_is_ignored(self, mock_recommend):
         # An empty dict must not be written as a config.json; the SDK should
         # receive the original model path and resolve it from HuggingFace.
         mock_recommend.return_value = make_mock_recommendation_result()
