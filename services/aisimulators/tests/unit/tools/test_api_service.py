@@ -10,6 +10,7 @@ requiring the Rust native extension or performance databases.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -965,13 +966,17 @@ class TestEstimate:
         resp = client.post("/estimate", json=VALID_ESTIMATE_BODY)
         assert resp.status_code == 500
 
-    @patch("tools.api_service.app._run_aisimulate_prediction")
-    def test_model_config_rejected(self, mock_estimate):
-        mock_estimate.side_effect = ValueError("model_config is not supported")
+    @patch("aisimulate.predict.run_prediction")
+    @patch("tools.api_service.app._aisimulate_runner_factory")
+    def test_model_config_is_forwarded_to_prediction(self, mock_factory, mock_run):
+        def check(config, **_kwargs):
+            assert Path(config.engine.model, "config.json").is_file()
+            return make_mock_estimate_result()
+
+        mock_run.side_effect = check
         body = {**VALID_ESTIMATE_BODY, "model_config": {"hidden_size": 8192, "architectures": ["LlamaForCausalLM"]}}
-        resp = client.post("/estimate", json=body)
-        assert resp.status_code == 422
-        assert "not supported" in resp.json()["detail"]
+        request = app_module.EstimateRequest.model_validate(body)
+        app_module._run_aisimulate_prediction(request, set())
 
     @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_inclusive_tpot(self, mock_estimate):
@@ -996,13 +1001,17 @@ class TestEstimate:
 
 class TestModelConfigPassthrough:
 
-    @patch("tools.api_service.app._run_aisimulate_recommendation")
-    def test_recommend_model_config_rejected(self, mock_recommend):
-        mock_recommend.side_effect = ValueError("model_config is not supported")
+    @patch("aisimulate.recommend.run_recommendation")
+    @patch("tools.api_service.app._aisimulate_runner_factory")
+    def test_recommend_model_config_is_forwarded(self, mock_factory, mock_run):
+        def check(config, **_kwargs):
+            assert Path(config.engine.model, "config.json").is_file()
+            return make_mock_recommendation_result()
+
+        mock_run.side_effect = check
         body = {**VALID_RECOMMEND_BODY, "model_config": {"hidden_size": 8192, "architectures": ["LlamaForCausalLM"]}}
-        resp = client.post("/recommend", json=body)
-        assert resp.status_code == 422
-        assert "not supported" in resp.json()["detail"]
+        request = app_module.RecommendRequest.model_validate(body)
+        app_module._run_aisimulate_recommendation(request)
 
     @patch("tools.api_service.app.estimate_kv_cache")
     def test_memory_accepts_model_config(self, mock_kv):
@@ -1011,24 +1020,25 @@ class TestModelConfigPassthrough:
         resp = client.post("/memory", json=body)
         assert resp.status_code == 200
 
-    @patch("tools.api_service.app._run_aisimulate_recommendation")
-    def test_empty_model_config_is_ignored(self, mock_recommend):
-        # An empty dict must not be written as a config.json; the SDK should
-        # receive the original model path and resolve it from HuggingFace.
-        mock_recommend.return_value = make_mock_recommendation_result()
-        body = {**VALID_RECOMMEND_BODY, "model_config": {}}
-        resp = client.post("/recommend", json=body)
-        assert resp.status_code == 200
-        assert mock_recommend.call_args.args[0].model_path == "Qwen/Qwen3-32B"
+    @patch("aisimulate.recommend.run_recommendation")
+    @patch("tools.api_service.app._aisimulate_runner_factory")
+    def test_empty_model_config_is_ignored(self, mock_factory, mock_run):
+        def check(config, **_kwargs):
+            assert config.engine.model == "Qwen/Qwen3-32B"
+            return make_mock_recommendation_result()
 
-    @patch("tools.api_service.app._run_aisimulate_recommendation")
-    def test_invalid_model_config_returns_422(self, mock_recommend):
-        mock_recommend.side_effect = ValueError("model_config is not supported")
+        mock_run.side_effect = check
+        body = {**VALID_RECOMMEND_BODY, "model_config": {}}
+        request = app_module.RecommendRequest.model_validate(body)
+        app_module._run_aisimulate_recommendation(request)
+
+    def test_invalid_model_config_reaches_aisimulate(self):
         body = {**VALID_RECOMMEND_BODY, "model_config": {"additionalProp1": {}}}
-        resp = client.post("/recommend", json=body)
-        assert resp.status_code == 422
-        detail = resp.json()["detail"]
-        assert "not supported" in detail
+        request = app_module.RecommendRequest.model_validate(body)
+        with patch("aisimulate.recommend.run_recommendation", side_effect=ValueError("invalid model config")), pytest.raises(
+            ValueError, match="invalid model config"
+        ):
+            app_module._run_aisimulate_recommendation(request)
 
 
 class TestOpenTelemetry:

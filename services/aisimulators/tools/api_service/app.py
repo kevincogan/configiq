@@ -412,7 +412,7 @@ def _aisimulate_runner_factory():
     return resolve_runner_factory("engine")
 
 
-def _aisimulate_recommendation_config(req: RecommendRequest) -> dict[str, Any]:
+def _aisimulate_recommendation_config(req: RecommendRequest, *, model_path: str | None = None) -> Any:
     from aisimulate.config.cli import CoreRecommendationConfig
 
     context_length = req.max_seq_len or req.isl + req.osl
@@ -422,7 +422,7 @@ def _aisimulate_recommendation_config(req: RecommendRequest) -> dict[str, Any]:
         else {"type": "concurrency", "concurrency": int(req.target_concurrency or 1)}
     )
     engine: dict[str, Any] = {
-        "model": req.model_path,
+        "model": model_path or req.model_path,
         "hardware": req.system,
         "backend": req.backend,
         "backend_version": req.backend_version,
@@ -458,7 +458,7 @@ def _aisimulate_recommendation_config(req: RecommendRequest) -> dict[str, Any]:
         },
         "optimizer": {"max_trials": 320, "parallelism": 16},
     }
-    return CoreRecommendationConfig.model_validate(raw).model_dump(mode="python", exclude_none=True)
+    return CoreRecommendationConfig.model_validate(raw)
 
 
 def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
@@ -474,8 +474,12 @@ def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
             tp = req.prefill_tp_size if role == "prefill" else req.decode_tp_size
             pp = req.prefill_pp_size if role == "prefill" else req.decode_pp_size
             dp = req.attention_dp_size
-            moe_tp = req.prefill_moe_tp_size if role == "prefill" else req.decode_moe_tp_size
-            moe_ep = req.prefill_moe_ep_size if role == "prefill" else req.decode_moe_ep_size
+            moe_tp = (
+                req.prefill_moe_tp_size if role == "prefill" else req.decode_moe_tp_size
+            ) or req.moe_tp_size
+            moe_ep = (
+                req.prefill_moe_ep_size if role == "prefill" else req.decode_moe_ep_size
+            ) or req.moe_ep_size
             batch = req.prefill_batch_size if role == "prefill" else req.decode_batch_size
             context = (
                 req.prefill_max_seq_len if role == "prefill" else req.decode_max_seq_len
@@ -516,7 +520,7 @@ def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
             "workers": workers,
         },
     }
-    return CorePredictionConfig.model_validate(raw).model_dump(mode="python", exclude_none=True)
+    return CorePredictionConfig.model_validate(raw)
 
 
 def _metric(metrics: dict[str, Any], *names: str) -> float | None:
@@ -562,6 +566,15 @@ def _aisimulate_candidate_config(candidate: Any, req: RecommendRequest) -> Recom
         request_latency=_metric(metrics, "e2e_latency_ms", "mean_e2e_latency_ms"),
         tokens_per_second=_metric(metrics, "output_throughput_tok_s", "tokens_per_second"),
         tokens_per_second_per_gpu=_metric(metrics, "output_throughput_tok_s_per_gpu"),
+        tokens_per_second_per_user=_metric(
+            metrics, "output_throughput_tok_s_per_user", "tokens_per_second_per_user"
+        ),
+        memory=_metric(metrics, "memory_gb", "memory", "peak_memory_gb"),
+        concurrency=_coerce_int(metrics.get("concurrency") or metrics.get("concurrent_users")),
+        request_rate=_metric(metrics, "request_rate", "requests_per_second"),
+        power_w=_metric(metrics, "power_w", "mean_power_w"),
+        gemm=metrics.get("gemm") or engine.get("gemm_quant_mode"),
+        kvcache=metrics.get("kvcache") or engine.get("kvcache_quant_mode"),
         model=engine.get("model", req.model_path), system=engine.get("hardware", req.system),
         backend=engine.get("backend", req.backend), backend_version=engine.get("backend_version", req.backend_version),
         mode=mode,
@@ -573,35 +586,32 @@ def _aisimulate_candidate_config(candidate: Any, req: RecommendRequest) -> Recom
 
 
 def _run_aisimulate_recommendation(req: RecommendRequest):
-    from aisimulate.config.cli import CoreRecommendationConfig
     from aisimulate.recommend import run_recommendation
 
-    if req.model_config_data:
-        raise ValueError("model_config is not supported by the aisimulate recommendation interface")
-    return run_recommendation(
-        CoreRecommendationConfig.model_validate(_aisimulate_recommendation_config(req)),
-        stack="engine",
-        runner_factory=_aisimulate_runner_factory(),
-        show_progress=False,
-    )
+    with _with_model_config(req.model_path, req.model_config_data) as effective_path:
+        return run_recommendation(
+            _aisimulate_recommendation_config(req, model_path=effective_path),
+            stack="engine",
+            runner_factory=_aisimulate_runner_factory(),
+            show_progress=False,
+        )
 
 
 def _run_aisimulate_prediction(req: EstimateRequest, include: set[str]):
-    from aisimulate.config.cli import CorePredictionConfig
     from aisimulate.predict import run_prediction
     from aisimulate.sweeper.replay import ReplayOutputRequirements
 
-    if req.model_config_data:
-        raise ValueError("model_config is not supported by the aisimulate prediction interface")
-    return run_prediction(
-        CorePredictionConfig.model_validate(_aisimulate_prediction_config(req)),
-        stack="engine",
-        runner_factory=_aisimulate_runner_factory(),
-        output_requirements=ReplayOutputRequirements(
-            include_raw_report=True,
-            capture_memory_diagnostics="memory" in include,
-        ),
-    )
+    with _with_model_config(req.model_path, req.model_config_data) as effective_path:
+        prediction_req = req.model_copy(update={"model_path": effective_path})
+        return run_prediction(
+            _aisimulate_prediction_config(prediction_req),
+            stack="engine",
+            runner_factory=_aisimulate_runner_factory(),
+            output_requirements=ReplayOutputRequirements(
+                include_raw_report=True,
+                capture_memory_diagnostics="memory" in include,
+            ),
+        )
 
 
 def _worker_config_from_row(row: pd.Series, prefix: str, req: RecommendRequest) -> WorkerConfig | None:
