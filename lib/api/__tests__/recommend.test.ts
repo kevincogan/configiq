@@ -78,6 +78,16 @@ describe('RecommendRequestSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('accepts context window limits', () => {
+    const result = RecommendRequestSchema.safeParse({
+      ...VALID_REQUEST,
+      max_seq_len: 64000,
+      prefill_max_seq_len: 128000,
+      decode_max_seq_len: 64000,
+    })
+    expect(result.success).toBe(true)
+  })
+
   it('accepts target_request_rate instead of target_concurrency', () => {
     const { target_concurrency, ...rest } = VALID_REQUEST
     const result = RecommendRequestSchema.safeParse({ ...rest, target_request_rate: 10 })
@@ -196,6 +206,23 @@ describe('callRecommend', () => {
 
     const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(sentBody.model_config).toEqual(model_config)
+  })
+
+  it('forwards context window limits to the upstream request', async () => {
+    const mockFetch = mockFetchOk(EXTERNAL_RESPONSE)
+    vi.stubGlobal('fetch', mockFetch)
+
+    await callRecommend({
+      ...VALID_REQUEST,
+      max_seq_len: 64000,
+      prefill_max_seq_len: 128000,
+      decode_max_seq_len: 64000,
+    })
+
+    const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(sentBody.max_seq_len).toBe(64000)
+    expect(sentBody.prefill_max_seq_len).toBe(128000)
+    expect(sentBody.decode_max_seq_len).toBe(64000)
   })
 
   it('omits model_config from the upstream request when absent', async () => {

@@ -8,6 +8,9 @@ interface RecommendParams {
   system: string;
   isl: number;
   osl: number;
+  max_seq_len?: number;
+  prefill_max_seq_len?: number;
+  decode_max_seq_len?: number;
   ttft: number;
   tpot?: number;
   backend?: string;
@@ -91,6 +94,9 @@ export function RecommendProvider({ children }: { children: React.ReactNode }) {
       tpot: p.tpot ?? 30,
       target_concurrency: p.target_concurrency ?? 32,
     };
+    if (p.max_seq_len != null) requestBody.max_seq_len = p.max_seq_len;
+    if (p.prefill_max_seq_len != null) requestBody.prefill_max_seq_len = p.prefill_max_seq_len;
+    if (p.decode_max_seq_len != null) requestBody.decode_max_seq_len = p.decode_max_seq_len;
     if (p.backend) requestBody.backend = p.backend;
     if (p.target_request_rate != null) {
       delete requestBody.target_concurrency;
