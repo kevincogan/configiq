@@ -543,7 +543,7 @@ def _aisimulate_worker_config(raw: dict[str, Any], role: str, req: RecommendRequ
     scheduler = worker.get("scheduler") or {}
     return WorkerConfig(
         tp=parallel.get("tensor"), pp=parallel.get("pipeline"), dp=parallel.get("attention_data"),
-        cp=parallel.get("context"),
+        cp=parallel.get("context") or 1,
         moe_tp=parallel.get("moe_tensor"), moe_ep=parallel.get("moe_expert"),
         num_workers=parallel.get("replicas"), batch_size=scheduler.get("max_sequences"),
         backend_version=(raw.get("engine") or {}).get("backend_version") or req.backend_version,
