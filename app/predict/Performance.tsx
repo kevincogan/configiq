@@ -219,10 +219,7 @@ export default function Performance() {
   const [parallelismManualReplicas, setParallelismManualReplicas] = React.useState<number | null>(null);
   const [vllmOverride, setVllmOverride] = React.useState(false);
   const [vllmManualMaxNumSeqs, setVllmManualMaxNumSeqs] = React.useState<number | null>(null);
-  const [vllmManualMaxModelLen, setVllmManualMaxModelLen] = React.useState<number | null>(null);
   const [vllmManualChunkedPrefill, setVllmManualChunkedPrefill] = React.useState<boolean | null>(null);
-  const [vllmManualPrefixCaching, setVllmManualPrefixCaching] = React.useState<boolean | null>(null);
-  const [vllmManualGpuUtil, setVllmManualGpuUtil] = React.useState<number | null>(null);
 
   // Save estimate modal
   const [showSaveModal, setShowSaveModal] = React.useState(false);
@@ -530,10 +527,7 @@ export default function Performance() {
       setParallelismManualReplicas(null);
       setVllmOverride(false);
       setVllmManualMaxNumSeqs(null);
-      setVllmManualMaxModelLen(null);
       setVllmManualChunkedPrefill(null);
-      setVllmManualPrefixCaching(null);
-      setVllmManualGpuUtil(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, gpu]);
@@ -915,12 +909,6 @@ export default function Performance() {
       if (vllmManualMaxNumSeqs !== null && vllmManualMaxNumSeqs <= 0) {
         warnings.push('vLLM: max_num_seqs must be > 0');
       }
-      if (vllmManualMaxModelLen !== null && vllmManualMaxModelLen <= 0) {
-        warnings.push('vLLM: max_model_len must be > 0');
-      }
-      if (vllmManualGpuUtil !== null && (vllmManualGpuUtil < 50 || vllmManualGpuUtil > 95)) {
-        warnings.push('vLLM: gpu_memory_utilization should be between 50-95%');
-      }
     }
 
     return warnings;
@@ -1153,6 +1141,35 @@ export default function Performance() {
       ],
     },
     {
+      id: 'serving',
+      title: 'Serving policy',
+      summary: [
+        { k: 'context limit', v: testResult ? `${testResult.vllm_config.max_model_len}` : '—' },
+        { k: 'prefix caching', v: testResult ? (testResult.vllm_config.enable_prefix_caching ? 'on' : 'off') : '—' },
+        { k: 'memory', v: testResult ? `${(testResult.vllm_config.gpu_memory_utilization * 100).toFixed(0)}%` : '—' },
+      ],
+      fields: [
+        {
+          label: 'Serving context limit',
+          value: testResult ? `${testResult.vllm_config.max_model_len}` : '—',
+          term: 'maxModelLen',
+          readonly: true,
+        },
+        {
+          label: 'Prefix caching',
+          value: testResult ? (testResult.vllm_config.enable_prefix_caching ? 'On' : 'Off') : '—',
+          term: 'prefixCaching',
+          readonly: true,
+        },
+        {
+          label: 'GPU memory utilization',
+          value: testResult ? `${(testResult.vllm_config.gpu_memory_utilization * 100).toFixed(0)}%` : '—',
+          term: 'gpuUtil',
+          readonly: true,
+        },
+      ],
+    },
+    {
       id: 'engine',
       title: 'vLLM config',
       badge: vllmOverride ? 'Manual override' : 'Auto-computed',
@@ -1161,22 +1178,16 @@ export default function Performance() {
       isOverridden: vllmOverride,
       onOverrideToggle: () => {
         if (vllmOverride) {
-          // Reset to auto
-          setVllmOverride(false);
-          setVllmManualMaxNumSeqs(null);
-          setVllmManualMaxModelLen(null);
-          setVllmManualChunkedPrefill(null);
-          setVllmManualPrefixCaching(null);
-          setVllmManualGpuUtil(null);
+           // Reset to auto
+           setVllmOverride(false);
+           setVllmManualMaxNumSeqs(null);
+           setVllmManualChunkedPrefill(null);
         } else {
           // Enable manual override - initialize with current computed values
-          setVllmOverride(true);
-          if (testResult) {
-            setVllmManualMaxNumSeqs(testResult.vllm_config.max_num_seqs);
-            setVllmManualMaxModelLen(testResult.vllm_config.max_model_len);
-            setVllmManualChunkedPrefill(testResult.vllm_config.enable_chunked_prefill);
-            setVllmManualPrefixCaching(testResult.vllm_config.enable_prefix_caching);
-            setVllmManualGpuUtil(Math.round(testResult.vllm_config.gpu_memory_utilization * 100));
+           setVllmOverride(true);
+           if (testResult) {
+             setVllmManualMaxNumSeqs(testResult.vllm_config.max_num_seqs);
+             setVllmManualChunkedPrefill(testResult.vllm_config.enable_chunked_prefill);
           }
         }
       },
@@ -1194,14 +1205,6 @@ export default function Performance() {
           onChange: vllmOverride ? (val: string) => setVllmManualMaxNumSeqs(parseInt(val) || 1) : undefined
         },
         {
-          label: 'max_model_len',
-          value: vllmOverride && vllmManualMaxModelLen !== null ? `${vllmManualMaxModelLen}` : testResult ? `${testResult.vllm_config.max_model_len}` : '—',
-          term: 'maxModelLen',
-          readonly: !vllmOverride,
-          type: vllmOverride ? 'number' as const : undefined,
-          onChange: vllmOverride ? (val: string) => setVllmManualMaxModelLen(parseInt(val) || 1) : undefined
-        },
-        {
           label: 'enable_chunked_prefill',
           value: vllmOverride && vllmManualChunkedPrefill !== null ? (vllmManualChunkedPrefill ? 'Yes' : 'No') : testResult ? (testResult.vllm_config.enable_chunked_prefill ? 'Yes' : 'No') : '—',
           term: 'chunkedPrefill',
@@ -1209,27 +1212,6 @@ export default function Performance() {
           type: vllmOverride ? 'select' as const : undefined,
           options: vllmOverride ? ['Yes', 'No'] : undefined,
           onChange: vllmOverride ? (val: string) => setVllmManualChunkedPrefill(val === 'Yes') : undefined
-        },
-        {
-          label: 'enable_prefix_caching',
-          value: vllmOverride && vllmManualPrefixCaching !== null ? (vllmManualPrefixCaching ? 'Yes' : 'No') : testResult ? (testResult.vllm_config.enable_prefix_caching ? 'Yes' : 'No') : '—',
-          term: 'prefixCaching',
-          readonly: !vllmOverride,
-          type: vllmOverride ? 'select' as const : undefined,
-          options: vllmOverride ? ['Yes', 'No'] : undefined,
-          onChange: vllmOverride ? (val: string) => setVllmManualPrefixCaching(val === 'Yes') : undefined
-        },
-        {
-          label: 'gpu_memory_utilization',
-          value: vllmOverride && vllmManualGpuUtil !== null ? `${vllmManualGpuUtil}%` : testResult ? `${(testResult.vllm_config.gpu_memory_utilization * 100).toFixed(0)}%` : '—',
-          term: 'gpuUtil',
-          readonly: !vllmOverride,
-          type: vllmOverride ? 'range' as const : undefined,
-          min: vllmOverride ? 50 : undefined,
-          max: vllmOverride ? 95 : undefined,
-          step: vllmOverride ? 5 : undefined,
-          rangeValue: vllmOverride && vllmManualGpuUtil !== null ? vllmManualGpuUtil : undefined,
-          onChange: vllmOverride ? (val: number) => setVllmManualGpuUtil(val) : undefined
         },
       ],
     },
