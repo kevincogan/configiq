@@ -813,6 +813,11 @@ def _common_error_handler(e: Exception, op: str, model_path: str, backend: str, 
     msg = str(e)
     if isinstance(e, NoFeasibleConfigError):
         raise HTTPException(status_code=422, detail=msg)
+    # Some SDK versions wrap NoViableParallelConfig while crossing the
+    # supervised-process boundary. It still means this GPU window is
+    # infeasible and must not terminate an incremental search.
+    if "NoViableParallelConfig" in msg or "no deployment_mode has a viable parallel config" in msg:
+        raise HTTPException(status_code=422, detail=msg)
     if isinstance(e, KeyError):
         # A bare KeyError here almost always means a supplied model_config is
         # incomplete (e.g. missing 'architectures'); str(KeyError('x')) is "'x'".

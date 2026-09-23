@@ -363,6 +363,14 @@ class TestRecommend:
         assert "bad input" in resp.json()["detail"]
 
     @patch("tools.api_service.app._run_aisimulate_recommendation")
+    def test_no_viable_parallel_config_returns_422(self, mock_recommend):
+        mock_recommend.side_effect = RuntimeError(
+            "NoViableParallelConfig: no deployment_mode has a viable parallel config"
+        )
+        resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
+        assert resp.status_code == 422
+
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_unexpected_error_returns_500(self, mock_recommend):
         mock_recommend.side_effect = RuntimeError("internal failure")
         resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
