@@ -430,6 +430,7 @@ def _aisimulate_recommendation_config(req: RecommendRequest) -> dict[str, Any]:
         "context_length": context_length,
         "mode": {"choices": ["aggregated", "disaggregated"]},
         "workers": {
+            "aggregated": {},
             "prefill": {"context_length": req.prefill_max_seq_len} if req.prefill_max_seq_len else {},
             "decode": {"context_length": req.decode_max_seq_len} if req.decode_max_seq_len else {},
         },
@@ -479,8 +480,7 @@ def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
             context = (
                 req.prefill_max_seq_len if role == "prefill" else req.decode_max_seq_len
             ) or req.max_seq_len or req.isl + req.osl
-        return {
-            "context_length": context,
+        result = {
             "parallelism": {
                 "replicas": (req.prefill_num_workers if role == "prefill" else req.decode_num_workers) or 1,
                 "tensor": tp or req.tp_size,
@@ -491,6 +491,9 @@ def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
             },
             "scheduler": {"max_sequences": batch or req.batch_size},
         }
+        if role != "agg":
+            result["context_length"] = context
+        return result
 
     mode = "disaggregated" if req.mode == "disagg" else "aggregated"
     workers = {"prefill": worker("prefill"), "decode": worker("decode")} if req.mode == "disagg" else {
