@@ -659,7 +659,7 @@ class TestIntegration:
             "top_n": 1,
         })
         _skip_if_missing_perf_data(resp)
-        assert resp.status_code == 200
+        assert resp.status_code == 200, resp.text
         data = resp.json()
         assert len(data["configs"]) == 1
         cfg = data["configs"][0]
@@ -676,7 +676,7 @@ class TestIntegration:
             "top_n": 1,
         })
         _skip_if_missing_perf_data(resp)
-        assert resp.status_code == 200
+        assert resp.status_code == 200, resp.text
         cfg = resp.json()["configs"][0]
         assert cfg["serving_config"] is not None
         assert cfg["serving_config"]["tensor_parallel_size"] >= 1
@@ -747,7 +747,7 @@ class TestIntegration:
             "batch_size": 48,
         })
         _skip_if_missing_perf_data(resp)
-        assert resp.status_code == 200
+        assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["ttft"] > 0
         assert data["tpot"] > 0
@@ -763,7 +763,7 @@ class TestIntegration:
             "batch_size": 48,
         })
         _skip_if_missing_perf_data(resp)
-        assert resp.status_code == 200
+        assert resp.status_code == 200, resp.text
         cfg = resp.json()
         assert cfg["serving_config"] is not None
         assert cfg["serving_config"]["tensor_parallel_size"] == 2
