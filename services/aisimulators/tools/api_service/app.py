@@ -437,8 +437,14 @@ def _aisimulate_recommendation_config(req: RecommendRequest, *, model_path: str 
             "mode": {"choices": ["aggregated", "disaggregated"]},
             "workers": {
                 "aggregated": {"parallelism": {"preset": "default"}},
-                "prefill": {"parallelism": {"preset": "default"}},
-                "decode": {"parallelism": {"preset": "default"}},
+                "prefill": {
+                    "parallelism": {"preset": "default"},
+                    **({"context_length": req.prefill_max_seq_len} if req.prefill_max_seq_len else {}),
+                },
+                "decode": {
+                    "parallelism": {"preset": "default"},
+                    **({"context_length": req.decode_max_seq_len} if req.decode_max_seq_len else {}),
+                },
             },
         },
         "evaluation": {
@@ -451,13 +457,13 @@ def _aisimulate_recommendation_config(req: RecommendRequest, *, model_path: str 
         "optimization": {
             "target": "min_gpus",
             "constraints": {
-                "max_candidate_gpus": 64,
+                "max_candidate_gpus": 1024,
                 **({"min_goodput_rps": req.target_request_rate} if req.target_request_rate is not None else {}),
             },
         },
         "optimizer": {
             "algorithm": "random",
-            "max_trials": 8,
+            "max_trials": max(8, min(32, req.top_n * 2)),
             "parallelism": 4,
             "candidate_timeout_seconds": 30,
         },
