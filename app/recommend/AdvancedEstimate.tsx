@@ -267,16 +267,20 @@ export default function AdvancedEstimate() {
   const invalidTpot = tpotInput === '' || !Number.isFinite(Number(tpotInput)) || Number(tpotInput) <= 0;
   const invalidConcurrency = concurrencyInput === '' || parseInt(concurrencyInput, 10) < 1;
   const invalidLatency = latencyInput !== '' && (!Number.isFinite(Number(latencyInput)) || Number(latencyInput) <= 0);
+  const validSequenceLength = (value: string) => /^[1-9][0-9]*$/.test(value) && Number.isSafeInteger(Number(value));
+  const invalidMaxSeqLen = maxSeqLenInput !== '' && !validSequenceLength(maxSeqLenInput);
+  const invalidPrefillMaxSeqLen = prefillMaxSeqLenInput !== '' && !validSequenceLength(prefillMaxSeqLenInput);
+  const invalidDecodeMaxSeqLen = decodeMaxSeqLenInput !== '' && !validSequenceLength(decodeMaxSeqLenInput);
 
   const handleSequenceLengthChange = (
     raw: string,
     setInput: (value: string) => void,
     setValue: (value: number | null) => void,
   ) => {
-    const digits = raw.replace(/[^0-9]/g, '');
-    setInput(digits);
-    const n = parseInt(digits, 10);
-    setValue(Number.isFinite(n) && n > 0 ? n : null);
+    const value = raw.trim();
+    setInput(value);
+    const n = Number(value);
+    setValue(validSequenceLength(value) ? n : null);
   };
 
   const handleIslChange = (raw: string) => {
@@ -455,7 +459,7 @@ export default function AdvancedEstimate() {
           <button
             className={styles.calcBtn}
             onClick={handleCalculate}
-            disabled={isLoading || !model.includes('/') || invalidISL || invalidOSL || invalidTTFT || invalidTpot || invalidConcurrency || invalidLatency}
+             disabled={isLoading || !model.includes('/') || invalidISL || invalidOSL || invalidTTFT || invalidTpot || invalidConcurrency || invalidLatency || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen}
           >
             {isLoading ? 'Calculating...' : 'Calculate'}
           </button>
@@ -567,50 +571,66 @@ export default function AdvancedEstimate() {
               </div>
             </div>
 
-            <div style={{ marginTop: 16 }}>
-              <div className={styles.fieldLabel}>Context window sizing</div>
-              <div style={{ fontSize: 13, color: '#3c3f42', margin: '4px 0 12px' }}>
-                Constrains KV cache allocation. Default is input + output sequence length (not the model&apos;s max_position_embeddings). Set lower to model serving at specific context tiers.
-              </div>
-              <div className={styles.paramGrid} style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
-                <div>
-                  <label className={styles.fieldLabel}>Max sequence length (tokens)</label>
-                  <input
-                    type="number"
-                    className={styles.paramInput}
-                    value={maxSeqLenInput}
-                    onChange={e => handleSequenceLengthChange(e.target.value, setMaxSeqLenInput, setMaxSeqLen)}
-                    min={1}
-                    placeholder="ISL + OSL"
-                  />
-                </div>
-                <div>
-                  <label className={styles.fieldLabel}>Prefill max sequence length (tokens)</label>
-                  <input
-                    type="number"
-                    className={styles.paramInput}
-                    value={prefillMaxSeqLenInput}
-                    onChange={e => handleSequenceLengthChange(e.target.value, setPrefillMaxSeqLenInput, setPrefillMaxSeqLen)}
-                    min={1}
-                    placeholder="Optional override"
-                  />
-                </div>
-                <div>
-                  <label className={styles.fieldLabel}>Decode max sequence length (tokens)</label>
-                  <input
-                    type="number"
-                    className={styles.paramInput}
-                    value={decodeMaxSeqLenInput}
-                    onChange={e => handleSequenceLengthChange(e.target.value, setDecodeMaxSeqLenInput, setDecodeMaxSeqLen)}
-                    min={1}
-                    placeholder="Optional override"
-                  />
-                </div>
-              </div>
-              <div style={{ fontSize: 13, color: '#3c3f42', marginTop: 8 }}>
-                Prefill and decode values apply to disaggregated workers and override the common value when set.
-              </div>
-            </div>
+            <Accordion style={{ marginTop: 16 }}>
+              <AccordionItem>
+                <AccordionToggle
+                  id="context-window-toggle"
+                  onClick={() => setExpanded(
+                    expanded.includes('context-window')
+                      ? expanded.filter(e => e !== 'context-window')
+                      : [...expanded, 'context-window']
+                  )}
+                  isExpanded={expanded.includes('context-window')}
+                >
+                  <span style={{ fontWeight: 600 }}>Context window sizing</span>
+                </AccordionToggle>
+                <AccordionContent isHidden={!expanded.includes('context-window')}>
+                  <div style={{ paddingTop: 12 }}>
+                    <div className={styles.paramGrid} style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+                      <div>
+                        <label className={styles.fieldLabel}>Max sequence length (tokens) <Term k="maxModelLen" /></label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          className={invalidMaxSeqLen ? styles.paramInputInvalid : styles.paramInput}
+                          value={maxSeqLenInput}
+                          onChange={e => handleSequenceLengthChange(e.target.value, setMaxSeqLenInput, setMaxSeqLen)}
+                          min={1}
+                          placeholder="ISL + OSL"
+                          aria-invalid={invalidMaxSeqLen}
+                        />
+                      </div>
+                      <div>
+                        <label className={styles.fieldLabel}>Prefill length (tokens) <Term k="prefillMaxSeqLen" /></label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          className={invalidPrefillMaxSeqLen ? styles.paramInputInvalid : styles.paramInput}
+                          value={prefillMaxSeqLenInput}
+                          onChange={e => handleSequenceLengthChange(e.target.value, setPrefillMaxSeqLenInput, setPrefillMaxSeqLen)}
+                          min={1}
+                          placeholder="Optional override"
+                          aria-invalid={invalidPrefillMaxSeqLen}
+                        />
+                      </div>
+                      <div>
+                        <label className={styles.fieldLabel}>Decode length (tokens) <Term k="decodeMaxSeqLen" /></label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          className={invalidDecodeMaxSeqLen ? styles.paramInputInvalid : styles.paramInput}
+                          value={decodeMaxSeqLenInput}
+                          onChange={e => handleSequenceLengthChange(e.target.value, setDecodeMaxSeqLenInput, setDecodeMaxSeqLen)}
+                          min={1}
+                          placeholder="Optional override"
+                          aria-invalid={invalidDecodeMaxSeqLen}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           </div>
         </div>
       )}
