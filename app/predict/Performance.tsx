@@ -234,6 +234,9 @@ export default function Performance() {
   const [testConcurrentUsers, setTestConcurrentUsers] = React.useState(1);
   const [testISL, setTestISL] = React.useState(2048);
   const [testOSL, setTestOSL] = React.useState(128);
+  const [maxSeqLen, setMaxSeqLen] = React.useState<number | null>(null);
+  const [prefillMaxSeqLen, setPrefillMaxSeqLen] = React.useState<number | null>(null);
+  const [decodeMaxSeqLen, setDecodeMaxSeqLen] = React.useState<number | null>(null);
   const [testPrefix, setTestPrefix] = React.useState(0);
   const [testTpSize, setTestTpSize] = React.useState(1);
   const [calcTrigger, setCalcTrigger] = React.useState(0);
@@ -252,6 +255,9 @@ export default function Performance() {
 
   const [islInput, setIslInput] = React.useState('2048');
   const [oslInput, setOslInput] = React.useState('128');
+  const [maxSeqLenInput, setMaxSeqLenInput] = React.useState('');
+  const [prefillMaxSeqLenInput, setPrefillMaxSeqLenInput] = React.useState('');
+  const [decodeMaxSeqLenInput, setDecodeMaxSeqLenInput] = React.useState('');
   const [concurrentUsersInput, setConcurrentUsersInput] = React.useState('1');
   const [prefixInput, setPrefixInput] = React.useState('0');
   const [tpSizeInput, setTpSizeInput] = React.useState('1');
@@ -264,6 +270,9 @@ export default function Performance() {
   const invalidUsers = concurrentUsersInput === '' || parseInt(concurrentUsersInput, 10) < 1;
   const invalidTpSize = tpSizeInput === '' || parseInt(tpSizeInput, 10) < 1;
   const invalidPpSize = ppSizeInput === '' || parseInt(ppSizeInput, 10) < 1;
+  const invalidMaxSeqLen = maxSeqLenInput !== '' && parseInt(maxSeqLenInput, 10) < 1;
+  const invalidPrefillMaxSeqLen = prefillMaxSeqLenInput !== '' && parseInt(prefillMaxSeqLenInput, 10) < 1;
+  const invalidDecodeMaxSeqLen = decodeMaxSeqLenInput !== '' && parseInt(decodeMaxSeqLenInput, 10) < 1;
 
   const handleIslChange = (raw: string) => {
     const digits = raw.replace(/[^0-9]/g, '');
@@ -277,6 +286,17 @@ export default function Performance() {
     setOslInput(digits);
     const n = parseInt(digits, 10);
     if (!isNaN(n) && n >= 1) setTestOSL(n);
+  };
+
+  const handleSequenceLengthChange = (
+    raw: string,
+    setInput: (value: string) => void,
+    setValue: (value: number | null) => void,
+  ) => {
+    const digits = raw.replace(/[^0-9]/g, '');
+    setInput(digits);
+    const value = parseInt(digits, 10);
+    setValue(Number.isInteger(value) && value > 0 ? value : null);
   };
 
   const handleConcurrentUsersChange = (raw: string) => {
@@ -417,6 +437,9 @@ export default function Performance() {
           osl: testOSL,
           batch_size: testConcurrentUsers,
           tp_size: testTpSize,
+          ...(maxSeqLen != null ? { max_seq_len: maxSeqLen } : {}),
+          ...(prefillMaxSeqLen != null ? { prefill_max_seq_len: prefillMaxSeqLen } : {}),
+          ...(decodeMaxSeqLen != null ? { decode_max_seq_len: decodeMaxSeqLen } : {}),
           pp_size: testPpSize,
           backend: inferenceBackend,
           prefix: testPrefix > 0 ? testPrefix : undefined,
@@ -715,6 +738,9 @@ export default function Performance() {
       backend: inferenceBackend,
       isl: testISL,
       osl: testOSL,
+      ...(maxSeqLen != null && { max_seq_len: maxSeqLen }),
+      ...(prefillMaxSeqLen != null && { prefill_max_seq_len: prefillMaxSeqLen }),
+      ...(decodeMaxSeqLen != null && { decode_max_seq_len: decodeMaxSeqLen }),
       batch_size: testConcurrentUsers,
       tp_size: testResult?.memory_analysis.tp_size ?? testTpSize,
       pp_size: testResult?.parallelism_strategy.pp_size ?? testPpSize,
@@ -747,7 +773,7 @@ export default function Performance() {
         decode_batch_size: parsePerfPhase(decodeCfg).batch,
       })
     };
-  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize]);
+  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, maxSeqLen, prefillMaxSeqLen, decodeMaxSeqLen, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize]);
 
   // Copy API request body to clipboard
   const handleCopyAPIRequest = async () => {
@@ -916,6 +942,7 @@ export default function Performance() {
       summary: [
         { k: 'ISL', v: `${testISL}` },
         { k: 'OSL', v: `${testOSL}` },
+        { k: 'context', v: maxSeqLen != null ? `${maxSeqLen}` : 'auto' },
         { k: 'users', v: `${testConcurrentUsers}` },
         { k: 'prefix', v: `${testPrefix}` },
       ],
@@ -935,6 +962,33 @@ export default function Performance() {
           type: 'number' as const,
           invalid: invalidOSL,
           onChange: (val: string) => handleOslChange(val)
+        },
+        {
+          label: 'Max sequence length',
+          value: maxSeqLenInput,
+          term: 'maxModelLen',
+          type: 'number' as const,
+          placeholder: 'ISL + OSL',
+          invalid: invalidMaxSeqLen,
+          onChange: (val: string) => handleSequenceLengthChange(val, setMaxSeqLenInput, setMaxSeqLen),
+        },
+        {
+          label: 'Prefill max sequence length',
+          value: prefillMaxSeqLenInput,
+          term: 'prefillMaxSeqLen',
+          type: 'number' as const,
+          placeholder: 'Optional override',
+          invalid: invalidPrefillMaxSeqLen,
+          onChange: (val: string) => handleSequenceLengthChange(val, setPrefillMaxSeqLenInput, setPrefillMaxSeqLen),
+        },
+        {
+          label: 'Decode max sequence length',
+          value: decodeMaxSeqLenInput,
+          term: 'decodeMaxSeqLen',
+          type: 'number' as const,
+          placeholder: 'Optional override',
+          invalid: invalidDecodeMaxSeqLen,
+          onChange: (val: string) => handleSequenceLengthChange(val, setDecodeMaxSeqLenInput, setDecodeMaxSeqLen),
         },
         {
           label: 'Concurrent users',
