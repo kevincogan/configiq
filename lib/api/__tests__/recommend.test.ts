@@ -264,6 +264,7 @@ describe('callRecommend', () => {
     }
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(noConfiguration)
+      .mockResolvedValueOnce(noConfiguration)
       .mockResolvedValueOnce(feasible)
       .mockResolvedValueOnce(refineEmpty))
 
@@ -272,10 +273,12 @@ describe('callRecommend', () => {
 
     expect(events.map(event => event.type)).toEqual([
       'search_started', 'window_started', 'window_completed',
+      'window_started', 'window_completed',
       'window_started', 'window_completed', 'refining',
       'window_started', 'window_completed', 'completed',
     ])
-    expect(events[5]).toMatchObject({ type: 'refining', candidateGpus: 4 })
+    expect(events[5]).toMatchObject({ type: 'window_started', window: { minGpus: 3, maxGpus: 4 } })
+    expect(events[7]).toMatchObject({ type: 'refining', window: { minGpus: 3, maxGpus: 3 }, candidateGpus: 4 })
     expect(events.at(-1)).toMatchObject({ type: 'completed', response: { status: 'completed' } })
   })
 

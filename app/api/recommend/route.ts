@@ -60,31 +60,55 @@ async function proxyToGateway(body: Record<string, unknown>, include: string): P
   }
 }
 
-function streamRecommendation(request: ReturnType<typeof RecommendRequestSchema.parse>): NextResponse {
+function streamRecommendation(
+  request: ReturnType<typeof RecommendRequestSchema.parse>,
+  requestSignal: AbortSignal,
+): NextResponse {
   const encoder = new TextEncoder()
+  const abortController = new AbortController()
+  if (requestSignal.aborted) abortController.abort()
+  let closed = false
+  const abort = () => abortController.abort()
+  requestSignal.addEventListener('abort', abort, { once: true })
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (event: RecommendProgressEvent) => {
+        if (closed) return
         controller.enqueue(encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`))
       }
 
-      try {
-        for await (const event of incrementalRecommend(request)) send(event)
-        controller.close()
-      } catch (err: unknown) {
-        send({
-          type: 'completed',
-          response: {
-            requestId: generateRequestId(),
-            status: 'failed',
-            error: {
-              code: 'INTERNAL_ERROR',
-              message: err instanceof Error ? err.message : 'An unexpected error occurred',
-            },
-          },
-        })
+      const finish = () => {
+        if (closed) return
+        closed = true
         controller.close()
       }
+
+      try {
+        for await (const event of incrementalRecommend(request, abortController.signal)) send(event)
+        finish()
+      } catch (err: unknown) {
+        if (!abortController.signal.aborted) {
+          send({
+            type: 'completed',
+            response: {
+              requestId: generateRequestId(),
+              status: 'failed',
+              error: {
+                code: 'INTERNAL_ERROR',
+                message: err instanceof Error ? err.message : 'An unexpected error occurred',
+              },
+            },
+          })
+        }
+        finish()
+      } finally {
+        requestSignal.removeEventListener('abort', abort)
+      }
+    },
+    cancel() {
+      closed = true
+      abortController.abort()
+      requestSignal.removeEventListener('abort', abort)
     },
   })
 
@@ -109,7 +133,7 @@ export async function POST(req: NextRequest) {
 
     const validated = RecommendRequestSchema.parse(body)
     if (req.headers.get('accept')?.includes('text/event-stream')) {
-      return streamRecommendation(validated)
+      return streamRecommendation(validated, req.signal)
     }
     const result = await callRecommend(validated)
 

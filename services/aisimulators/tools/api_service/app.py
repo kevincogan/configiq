@@ -442,7 +442,10 @@ def _aisimulate_recommendation_config(
     from aisimulate.config.cli import CoreRecommendationConfig
 
     context_length = req.max_seq_len or req.isl + req.osl
-    window_max_gpus = req.max_candidate_gpus or max_candidate_gpus or _max_candidate_gpus()
+    server_max_gpus = max_candidate_gpus or _max_candidate_gpus()
+    window_max_gpus = min(req.max_candidate_gpus, server_max_gpus) if req.max_candidate_gpus else server_max_gpus
+    if req.min_candidate_gpus is not None and req.min_candidate_gpus > window_max_gpus:
+        raise ValueError("min_candidate_gpus cannot exceed the effective max_candidate_gpus.")
     # A one-GPU total window cannot contain a disaggregated deployment: it
     # requires at least one prefill and one decode GPU. Narrow windows also
     # need a small trial budget so incremental search does not spend the full

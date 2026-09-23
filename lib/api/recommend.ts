@@ -175,7 +175,7 @@ function parsePhase(raw: RawWorkerConfig | null | undefined): PhaseConfig | null
 
 export async function callRecommend(
   request: RecommendRequest,
-  options: { window?: RecommendWindow; timeoutSeconds?: number } = {},
+  options: { window?: RecommendWindow; timeoutSeconds?: number; signal?: AbortSignal } = {},
 ): Promise<RecommendResponse> {
   const requestId = generateRequestId()
   const startTime = performance.now()
@@ -215,6 +215,10 @@ export async function callRecommend(
 
   let response: Response
   try {
+    const timeoutSignal = AbortSignal.timeout(requestTimeoutSeconds * 1000)
+    const signal = options.signal
+      ? AbortSignal.any([timeoutSignal, options.signal])
+      : timeoutSignal
     response = await fetch(`${baseUrl}/recommend`, {
       method: 'POST',
       headers: {
@@ -222,9 +226,10 @@ export async function callRecommend(
         'Accept': 'application/json',
       },
       body: JSON.stringify(externalPayload),
-      signal: AbortSignal.timeout(requestTimeoutSeconds * 1000),
+      signal,
     })
   } catch (err: unknown) {
+    if (options.signal?.aborted) throw err
     const durationMs = Math.round(performance.now() - startTime)
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
       return makeError(requestId, 'AISIM_TIMEOUT', `The AISimulators API did not respond within ${requestTimeoutSeconds} seconds (waited ${durationMs}ms)`)
@@ -355,6 +360,7 @@ export async function callRecommend(
  */
 export async function* incrementalRecommend(
   request: RecommendRequest,
+  signal?: AbortSignal,
 ): AsyncGenerator<RecommendProgressEvent> {
   const maxGpus = configuredMaxCandidateGpus()
   const totalTimeoutSeconds = gatewayTimeoutSeconds()
@@ -366,24 +372,26 @@ export async function* incrementalRecommend(
   yield { type: 'search_started', maxGpus }
 
   while (windowMin <= maxGpus) {
+    if (signal?.aborted) throw new DOMException('Recommendation search aborted', 'AbortError')
     const window = { minGpus: windowMin, maxGpus: windowMax }
     yield { type: 'window_started', window }
     const remainingSeconds = Math.ceil((deadline - performance.now()) / 1000)
     if (remainingSeconds <= 0) {
       yield {
         type: 'completed',
-        response: makeError(generateRequestId(), 'AISIM_TIMEOUT', 'The incremental recommendation search exceeded its overall time budget.'),
+        response: best ?? makeError(generateRequestId(), 'AISIM_TIMEOUT', 'The incremental recommendation search exceeded its overall time budget.'),
       }
       return
     }
     const response = await callRecommend(request, {
       window,
-      timeoutSeconds: Math.min(20, remainingSeconds),
+      timeoutSeconds: remainingSeconds,
+      signal,
     })
 
     if (response.status === 'failed') {
       if (response.error.code !== 'AISIM_NO_CONFIGURATION') {
-        yield { type: 'completed', response }
+        yield { type: 'completed', response: best ?? response }
         return
       }
 

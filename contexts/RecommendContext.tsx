@@ -131,16 +131,29 @@ export function RecommendProvider({ children }: { children: React.ReactNode }) {
           signal: controller.signal,
         });
         if (!controller.signal.aborted) setDebugStatus(res.status);
-        if (!res.ok || !res.body) throw new Error('Recommendation stream unavailable');
+        if (!res.ok) {
+          const data = await res.json().catch(() => null) as Record<string, unknown> | null;
+          const error = data?.error as Record<string, unknown> | undefined;
+          if (!controller.signal.aborted) {
+            setDebugResponse(data ?? { status: res.status });
+            setError(typeof error?.message === 'string' ? error.message : `Recommendation request failed (${res.status})`);
+            setErrorCode(typeof error?.code === 'string' ? error.code : 'NETWORK_ERROR');
+            setDebugDuration(Math.round(performance.now() - t0));
+          }
+          return;
+        }
+        if (!res.body) throw new Error('Recommendation stream unavailable');
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let completed = false;
         const handleEvent = (raw: string) => {
           const dataLine = raw.split('\n').find(line => line.startsWith('data: '));
           if (!dataLine) return;
           const event = JSON.parse(dataLine.slice(6)) as RecommendProgressEvent;
           if (event.type === 'completed') {
+            completed = true;
             const response = event.response;
             setDebugResponse(response as unknown as Record<string, unknown>);
             setDebugDuration(Math.round(performance.now() - t0));
@@ -162,6 +175,11 @@ export function RecommendProvider({ children }: { children: React.ReactNode }) {
           buffer = events.pop() ?? '';
           events.forEach(handleEvent);
           if (done) break;
+        }
+        if (!completed && !controller.signal.aborted) {
+          setError('Recommendation stream ended before a result was received');
+          setErrorCode('NETWORK_ERROR');
+          setDebugDuration(Math.round(performance.now() - t0));
         }
       } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') return;

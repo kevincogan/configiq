@@ -148,6 +148,22 @@ class TestRecommend:
 
         assert config.optimization.constraints.max_candidate_gpus == 4096
 
+    def test_requested_gpu_window_is_clamped_to_server_budget(self, monkeypatch):
+        monkeypatch.setenv("AISIMULATORS_MAX_CANDIDATE_GPUS", "8")
+        body = {**VALID_RECOMMEND_BODY, "max_candidate_gpus": 64}
+        request = app_module.RecommendRequest.model_validate(body)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.optimization.constraints.max_candidate_gpus == 8
+
+    def test_rejects_window_lower_bound_above_effective_server_budget(self, monkeypatch):
+        monkeypatch.setenv("AISIMULATORS_MAX_CANDIDATE_GPUS", "8")
+        body = {**VALID_RECOMMEND_BODY, "min_candidate_gpus": 9, "max_candidate_gpus": 64}
+        request = app_module.RecommendRequest.model_validate(body)
+
+        with pytest.raises(ValueError, match="effective max_candidate_gpus"):
+            app_module._aisimulate_recommendation_config(request)
+
     def test_recommendation_window_bounds_are_forwarded(self):
         body = {**VALID_RECOMMEND_BODY, "min_candidate_gpus": 2, "max_candidate_gpus": 4}
         request = app_module.RecommendRequest.model_validate(body)
