@@ -228,7 +228,7 @@ class TestRecommend:
         mock_recommend.return_value = make_mock_recommendation_result()
         resp = client.post("/recommend?include=memory", json=VALID_RECOMMEND_BODY)
         cfg = resp.json()["configs"][0]
-        assert cfg["memory_breakdown"] is None
+        assert cfg["memory_breakdown"] is not None
         assert cfg["serving_config"] is None
 
     @patch("tools.api_service.app._run_aisimulate_recommendation")
@@ -237,7 +237,7 @@ class TestRecommend:
         resp = client.post("/recommend?include=config,memory", json=VALID_RECOMMEND_BODY)
         cfg = resp.json()["configs"][0]
         assert cfg["serving_config"] is not None
-        assert cfg["memory_breakdown"] is None
+        assert cfg["memory_breakdown"] is not None
 
     @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_top_n_limits_results(self, mock_recommend):
@@ -343,11 +343,11 @@ class TestRecommend:
         assert cfg["backend"] == "vllm"
 
     @patch("tools.api_service.app._run_aisimulate_recommendation")
-    def test_memory_breakdown_is_not_built_by_recommend(self, mock_recommend):
+    def test_recommend_builds_memory_breakdown(self, mock_recommend):
         mock_recommend.return_value = make_mock_recommendation_result()
         resp = client.post("/recommend?include=memory", json=VALID_RECOMMEND_BODY)
         assert resp.status_code == 200
-        assert resp.json()["configs"][0]["memory_breakdown"] is None
+        assert resp.json()["configs"][0]["memory_breakdown"] is not None
 
 
 # ─── /memory tests ───────────────────────────────────────────────────────────
