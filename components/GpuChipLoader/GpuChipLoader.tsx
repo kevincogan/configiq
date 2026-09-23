@@ -30,8 +30,13 @@ export function GpuChipLoader({ elapsed, timeoutSeconds, progressMessage }: GpuC
     <div className={styles.wrap}>
       <div className={styles.chipAndPhases}>
         <GpuChipSvg />
-        <div className={styles.phases}>
-          {PHASES.map((label, i) => {
+        <div className={styles.phases} aria-live="polite">
+          {progressMessage ? (
+            <div className={`${styles.phase} ${styles.phaseActive}`}>
+              <span className={styles.activeDot} />
+              {progressMessage}
+            </div>
+          ) : PHASES.map((label, i) => {
             const done = i < activeIndex;
             const active = i === activeIndex;
             return (
@@ -54,7 +59,6 @@ export function GpuChipLoader({ elapsed, timeoutSeconds, progressMessage }: GpuC
       </div>
       <div style={{ textAlign: 'center' }}>
         <div className={styles.timer}>{elapsed}s elapsed</div>
-        {progressMessage && <div className={styles.timerNote}>{progressMessage}</div>}
         <div className={styles.timerNote}>This typically takes 10–20 seconds, but can take up to {timeoutSeconds} seconds</div>
       </div>
     </div>
