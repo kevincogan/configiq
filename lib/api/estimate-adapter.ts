@@ -1,6 +1,6 @@
 /**
  * Adapter that calls the AISimulators /estimate API and converts the response
- * into the InferenceConfigResult shape used by the Performance Estimate page.
+ * into the InferenceConfigResult shape used by the Predict performance page.
  *
  * Unlike the recommend adapter, /estimate takes explicit TP/PP/batch_size
  * and returns TTFT/TPOT for that specific configuration. The caller is

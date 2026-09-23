@@ -14,7 +14,7 @@ import DollarSignIcon from '@patternfly/react-icons/dist/esm/icons/dollar-sign-i
 import { InfoStrip, InfoStripAction } from '@/components/ui/InfoStrip';
 import { DebugPanel } from '@/components/DebugPanel/DebugPanel';
 
-import styles from './AdvancedEstimate.module.css';
+import styles from './Sizing.module.css';
 import { fetchModelConfig } from '@/lib/huggingface/fetch-config';
 import { useRecommend } from '@/contexts/RecommendContext';
 import { isMoeConfig, type PhaseConfig } from '@/lib/api/recommend';
@@ -33,7 +33,7 @@ function modelSuggestions(): string {
   return names.length > 0 ? names.join(', ') : 'Nemotron, DeepSeek V4, Gemma 4, Kimi';
 }
 import { GpuChipLoader } from '@/components/GpuChipLoader/GpuChipLoader';
-import { Term } from '@/app/performance/quickEstimateHelpers';
+import { Term } from '@/app/predict/performanceHelpers';
 import { HOURS_PER_MONTH, AMORT_MONTHS_5YR } from '@/lib/utils/format';
 
 
@@ -208,7 +208,7 @@ function friendlyErrorHint(code: string | null): string {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export default function AdvancedEstimate() {
+export default function Sizing() {
   const { hydrated, hfToken, defaultModel: settingsDefaultModel, inferenceBackend, costingsEnabled, pricingSource, preferredCloudProvider } = useSettings();
   const costings = useCostings(costingsEnabled, pricingSource);
   const { modelOptions: catalogModels, gpuOptions: catalogGpus, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();

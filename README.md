@@ -64,7 +64,7 @@ app/                  Next.js App Router pages
   page.tsx            Homepage
   recommend/          Recommend sizing tool
   kv-cache/           KV Cache Calculator
-  performance/        Performance estimates
+  predict/             Predict performance
   gpu-explorer/       GPU Explorer
   hybrid-savings/     Hybrid Savings
   routing/            Routing Economics

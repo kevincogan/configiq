@@ -110,7 +110,7 @@ export function Settings() {
             <div>
               <div className={styles.sectionTitle}>Default model</div>
               <div className={styles.sectionDesc}>
-                Pre-filled in Performance estimate, KV cache calculator, and Recommend sizing. Use any Hugging Face model ID.
+                Pre-filled in Predict performance, KV cache calculator, and Recommend sizing. Use any Hugging Face model ID.
               </div>
             </div>
             {modelSaved && (

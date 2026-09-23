@@ -2,6 +2,15 @@
 const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
+  async redirects() {
+    return [
+      {
+        source: '/performance',
+        destination: '/predict',
+        permanent: true,
+      },
+    ];
+  },
   async headers() {
     return [
       {

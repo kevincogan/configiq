@@ -44,7 +44,7 @@ REST API (server URL set via `AISIMULATORS_GATEWAY_URL`, e.g.
 app/                    # Next.js App Router pages
   layout.tsx            # Root layout with AppShell
   page.tsx              # Homepage
-  performance/          # Performance tool
+  predict/              # Predict performance tool
   recommend/            # Recommend sizing tool
   kv-cache/             # KV Cache Calculator tool
   gpu-explorer/         # GPU Explorer tool
@@ -167,7 +167,7 @@ these values rather than accepting the default.
 
 ## Interaction polish (Performance page specific)
 
-The Performance page (`/performance`) has specific interaction patterns
+The Predict performance page (`/predict`) has specific interaction patterns
 that must be preserved:
 
 - **Flip tiles** — result tiles flip on click/Enter to reveal formulas. Use

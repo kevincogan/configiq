@@ -20,8 +20,8 @@ import LayerGroupIcon from '@patternfly/react-icons/dist/esm/icons/layer-group-i
 import InfoCircleIcon from '@patternfly/react-icons/dist/esm/icons/info-circle-icon';
 import EyeIcon from '@patternfly/react-icons/dist/esm/icons/eye-icon';
 import EyeSlashIcon from '@patternfly/react-icons/dist/esm/icons/eye-slash-icon';
-import styles from './PerformanceEstimate.module.css';
-import { Term, FlipTile, Sparkline, useCountUp } from './quickEstimateHelpers';
+import styles from './Performance.module.css';
+import { Term, FlipTile, Sparkline, useCountUp } from './performanceHelpers';
 import { ProductTour, type TourStep } from '@/components/ProductTour';
 import { SaveEstimateModal } from './SaveEstimateModal';
 import { DebugPanel } from '@/components/DebugPanel/DebugPanel';
@@ -109,7 +109,7 @@ const QUICK_ESTIMATE_TOUR: TourStep[] = [
   {
     target: '[data-tour="warning"]',
     title: 'Default assumptions',
-    description: 'Quick estimates start with common defaults. Click "Adjust" to match your actual workload and traffic patterns.',
+    description: 'Predict performance starts with common defaults. Click "Adjust" to match your actual workload and traffic patterns.',
     position: 'bottom'
   },
   {
@@ -126,8 +126,8 @@ const QUICK_ESTIMATE_TOUR: TourStep[] = [
   }
 ];
 
-export default function QuickEstimate() {
-  console.log('🔵 QuickEstimate component mounting');
+export default function Performance() {
+  console.log('Performance component mounting');
   const { hydrated, hfToken, defaultModel: settingsDefaultModel, inferenceBackend, backendVersion, costingsEnabled, preferredCloudProvider, pricingSource } = useSettings();
   const costings = useCostings(costingsEnabled, pricingSource);
   const { gpuOptions: catalogGpus, modelOptions: catalogModels, modelSpecs, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
@@ -489,7 +489,7 @@ export default function QuickEstimate() {
 
   // Check if user has seen the tour before
   React.useEffect(() => {
-    const hasSeenTour = localStorage.getItem('qe-tour-seen');
+    const hasSeenTour = localStorage.getItem('predict-performance-tour-seen');
     if (hasSeenTour) {
       setTourSeen(true);
     } else {
@@ -642,7 +642,7 @@ export default function QuickEstimate() {
   const handleTourComplete = () => {
     setShowTour(false);
     setTourSeen(true);
-    localStorage.setItem('qe-tour-seen', 'true');
+    localStorage.setItem('predict-performance-tour-seen', 'true');
   };
 
   const handleTakeTour = () => {
@@ -1186,7 +1186,7 @@ export default function QuickEstimate() {
       <div className={styles.header}>
         <div className={styles.headRow}>
           <div>
-            <h1 className={styles.pageTitle}>Performance estimate</h1>
+            <h1 className={styles.pageTitle}>Predict performance</h1>
             <p className={styles.subtitle}>See time to first token, throughput, and memory estimates in seconds — refine as needed.</p>
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>
@@ -1217,7 +1217,7 @@ export default function QuickEstimate() {
           {/* Column 1: Model field */}
           <div>
             <ComboBox
-              id="qe-model"
+              id="predict-performance-model"
               value={model}
               onChange={setModel}
               items={modelItems}
@@ -1229,7 +1229,7 @@ export default function QuickEstimate() {
           </div>
 
           {/* Column 2: GPU target */}
-          <GpuSystemInput id="qe-gpu" value={gpu} onChange={setGpu} gpuOptions={catalogGpus} />
+              <GpuSystemInput id="predict-performance-gpu" value={gpu} onChange={setGpu} gpuOptions={catalogGpus} />
 
         </div>
         
