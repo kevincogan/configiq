@@ -20,9 +20,10 @@ interface GpuChipLoaderProps {
   /** Upper-bound wait shown in the hint, in seconds. Pass
    * DEFAULT_GATEWAY_TIMEOUT_SECONDS from lib/api/timeout. */
   timeoutSeconds: number;
+  progressMessage?: string;
 }
 
-export function GpuChipLoader({ elapsed, timeoutSeconds }: GpuChipLoaderProps) {
+export function GpuChipLoader({ elapsed, timeoutSeconds, progressMessage }: GpuChipLoaderProps) {
   const activeIndex = Math.min(Math.floor(elapsed / PHASE_DURATION), PHASES.length - 1);
 
   return (
@@ -53,6 +54,7 @@ export function GpuChipLoader({ elapsed, timeoutSeconds }: GpuChipLoaderProps) {
       </div>
       <div style={{ textAlign: 'center' }}>
         <div className={styles.timer}>{elapsed}s elapsed</div>
+        {progressMessage && <div className={styles.timerNote}>{progressMessage}</div>}
         <div className={styles.timerNote}>This typically takes 10–20 seconds, but can take up to {timeoutSeconds} seconds</div>
       </div>
     </div>

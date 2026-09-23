@@ -148,6 +148,14 @@ class TestRecommend:
 
         assert config.optimization.constraints.max_candidate_gpus == 4096
 
+    def test_recommendation_window_bounds_are_forwarded(self):
+        body = {**VALID_RECOMMEND_BODY, "min_candidate_gpus": 2, "max_candidate_gpus": 4}
+        request = app_module.RecommendRequest.model_validate(body)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.optimization.constraints.min_candidate_gpus == 2
+        assert config.optimization.constraints.max_candidate_gpus == 4
+
     @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_success(self, mock_recommend):
         mock_recommend.return_value = make_mock_recommendation_result()

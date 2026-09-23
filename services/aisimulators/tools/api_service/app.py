@@ -70,6 +70,8 @@ class RecommendRequest(BaseModel):
     prefix: int = Field(default=0, description="Prefix cache length.")
     database_mode: str = Field(default="HYBRID", description="Perf database mode.")
     top_n: int = Field(default=5, ge=1, le=20, examples=[2], description="Number of configs to return.")
+    min_candidate_gpus: int | None = Field(default=None, gt=0, description="Lower bound for the recommendation GPU window.")
+    max_candidate_gpus: int | None = Field(default=None, gt=0, description="Upper bound for the recommendation GPU window.")
     inclusive_tpot: bool = Field(
         default=False,
         description="Report TPOT as (ttft + tpot * (osl - 1)) / osl, spreading TTFT across all output tokens. "
@@ -91,6 +93,12 @@ class RecommendRequest(BaseModel):
         has_conc = self.target_concurrency is not None
         if has_rate == has_conc:
             raise ValueError("Exactly one of target_request_rate or target_concurrency must be provided.")
+        if (
+            self.min_candidate_gpus is not None
+            and self.max_candidate_gpus is not None
+            and self.min_candidate_gpus > self.max_candidate_gpus
+        ):
+            raise ValueError("min_candidate_gpus cannot exceed max_candidate_gpus.")
         return self
 
 
@@ -475,7 +483,8 @@ def _aisimulate_recommendation_config(
         "optimization": {
             "target": "min_gpus",
             "constraints": {
-                "max_candidate_gpus": max_candidate_gpus or _max_candidate_gpus(),
+                "min_candidate_gpus": req.min_candidate_gpus,
+                "max_candidate_gpus": req.max_candidate_gpus or max_candidate_gpus or _max_candidate_gpus(),
                 **({"min_goodput_rps": req.target_request_rate} if req.target_request_rate is not None else {}),
             },
         },

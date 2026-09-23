@@ -244,7 +244,7 @@ export default function Sizing() {
   const [modelStatus, setModelStatus] = React.useState<'idle' | 'supported' | 'catalog' | 'fetching' | 'fetched' | 'error'>('idle');
 
   // GPU sizer (persistent across navigation)
-  const { isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, startSizing } = useRecommend();
+  const { isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, progress, startSizing } = useRecommend();
   const [debugOpen, setDebugOpen] = React.useState(false);
 
   // Additional constraints accordion
@@ -638,7 +638,7 @@ export default function Sizing() {
       {/* ─── Loading ─── */}
       {isLoading && (
         <div className={styles.card}>
-          <GpuChipLoader elapsed={elapsed} timeoutSeconds={gatewayTimeout} />
+          <GpuChipLoader elapsed={elapsed} timeoutSeconds={gatewayTimeout} progressMessage={recommendProgressMessage(progress)} />
         </div>
       )}
 
@@ -960,4 +960,24 @@ export default function Sizing() {
 function StatusChip({ status }: { status: string }) {
   if (status === 'idle') return null;
   return null; // Chip is rendered inside the input wrapper instead
+}
+
+function recommendProgressMessage(progress: ReturnType<typeof useRecommend>['progress']): string | undefined {
+  if (!progress) return undefined;
+  switch (progress.type) {
+    case 'search_started':
+      return `Searching up to ${progress.maxGpus} GPUs`;
+    case 'window_started':
+      return progress.window.minGpus === progress.window.maxGpus
+        ? `Evaluating ${progress.window.minGpus} GPU`
+        : `Evaluating ${progress.window.minGpus}–${progress.window.maxGpus} GPUs`;
+    case 'window_completed':
+      return progress.candidateGpus == null
+        ? 'No qualifying configuration found in this window'
+        : `Found a provisional ${progress.candidateGpus}-GPU candidate; checking smaller configurations`;
+    case 'refining':
+      return `Refining below ${progress.candidateGpus} GPUs`;
+    case 'completed':
+      return undefined;
+  }
 }

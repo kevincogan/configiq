@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { RecommendRequestSchema } from '@/lib/api/schemas'
-import { callRecommend, generateRequestId } from '@/lib/api/recommend'
+import { callRecommend, generateRequestId, incrementalRecommend, type RecommendProgressEvent } from '@/lib/api/recommend'
 import { gatewayTimeoutSeconds } from '@/lib/api/timeout'
 
 const ERROR_STATUS_MAP: Record<string, number> = {
@@ -60,6 +60,44 @@ async function proxyToGateway(body: Record<string, unknown>, include: string): P
   }
 }
 
+function streamRecommendation(request: ReturnType<typeof RecommendRequestSchema.parse>): NextResponse {
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: RecommendProgressEvent) => {
+        controller.enqueue(encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`))
+      }
+
+      try {
+        for await (const event of incrementalRecommend(request)) send(event)
+        controller.close()
+      } catch (err: unknown) {
+        send({
+          type: 'completed',
+          response: {
+            requestId: generateRequestId(),
+            status: 'failed',
+            error: {
+              code: 'INTERNAL_ERROR',
+              message: err instanceof Error ? err.message : 'An unexpected error occurred',
+            },
+          },
+        })
+        controller.close()
+      }
+    },
+  })
+
+  return new NextResponse(stream, {
+    status: 200,
+    headers: {
+      'Cache-Control': 'no-cache, no-store',
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'X-Accel-Buffering': 'no',
+    },
+  })
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -70,6 +108,9 @@ export async function POST(req: NextRequest) {
     }
 
     const validated = RecommendRequestSchema.parse(body)
+    if (req.headers.get('accept')?.includes('text/event-stream')) {
+      return streamRecommendation(validated)
+    }
     const result = await callRecommend(validated)
 
     if (result.status === 'failed') {
@@ -113,6 +154,7 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
 
 export async function OPTIONS() {
   return new NextResponse(null, {
