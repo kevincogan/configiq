@@ -134,6 +134,20 @@ class MockPredictionResult:
 
 class TestRecommend:
 
+    def test_recommendation_search_is_bounded(self):
+        request = app_module.RecommendRequest.model_validate(VALID_RECOMMEND_BODY)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.optimization.constraints.max_candidate_gpus == 1024
+        assert config.optimizer.max_trials == 8
+
+    def test_recommendation_search_budget_is_configurable(self, monkeypatch):
+        monkeypatch.setenv("AISIMULATORS_MAX_CANDIDATE_GPUS", "4096")
+        request = app_module.RecommendRequest.model_validate(VALID_RECOMMEND_BODY)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.optimization.constraints.max_candidate_gpus == 4096
+
     @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_success(self, mock_recommend):
         mock_recommend.return_value = make_mock_recommendation_result()

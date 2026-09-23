@@ -11,6 +11,7 @@ See docs/api/openapi.yaml for the full spec.
 import argparse
 import json
 import logging
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -336,6 +337,7 @@ _SM_ARCHITECTURE = {
 }
 
 _DEFAULT_GPU_MEMORY_UTILIZATION = 0.9
+_DEFAULT_MAX_CANDIDATE_GPUS = 1024
 
 
 class _noop_context:
@@ -412,7 +414,23 @@ def _aisimulate_runner_factory():
     return resolve_runner_factory("engine")
 
 
-def _aisimulate_recommendation_config(req: RecommendRequest, *, model_path: str | None = None) -> Any:
+def _max_candidate_gpus() -> int:
+    raw = os.environ.get("AISIMULATORS_MAX_CANDIDATE_GPUS")
+    if raw is None:
+        return _DEFAULT_MAX_CANDIDATE_GPUS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_MAX_CANDIDATE_GPUS
+    return value if value > 0 else _DEFAULT_MAX_CANDIDATE_GPUS
+
+
+def _aisimulate_recommendation_config(
+    req: RecommendRequest,
+    *,
+    model_path: str | None = None,
+    max_candidate_gpus: int | None = None,
+) -> Any:
     from aisimulate.config.cli import CoreRecommendationConfig
 
     context_length = req.max_seq_len or req.isl + req.osl
@@ -457,13 +475,13 @@ def _aisimulate_recommendation_config(req: RecommendRequest, *, model_path: str 
         "optimization": {
             "target": "min_gpus",
             "constraints": {
-                "max_candidate_gpus": 1024,
+                "max_candidate_gpus": max_candidate_gpus or _max_candidate_gpus(),
                 **({"min_goodput_rps": req.target_request_rate} if req.target_request_rate is not None else {}),
             },
         },
         "optimizer": {
             "algorithm": "random",
-            "max_trials": max(8, min(32, req.top_n * 2)),
+            "max_trials": 8,
             "parallelism": 4,
             "candidate_timeout_seconds": 30,
         },
@@ -606,7 +624,6 @@ def _run_aisimulate_recommendation(req: RecommendRequest):
             runner_factory=_aisimulate_runner_factory(),
             show_progress=False,
         )
-
 
 def _run_aisimulate_prediction(req: EstimateRequest, include: set[str]):
     from aisimulate.predict import run_prediction
