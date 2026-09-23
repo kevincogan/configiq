@@ -33,6 +33,7 @@ interface RecommendState {
   debugStatus: number | null;
   debugDuration: number | null;
   progress: RecommendProgressEvent | null;
+  progressHistory: RecommendProgressEvent[];
   startSizing: (params: RecommendParams) => void;
   reset: () => void;
 }
@@ -49,6 +50,7 @@ const RecommendContext = React.createContext<RecommendState>({
   debugStatus: null,
   debugDuration: null,
   progress: null,
+  progressHistory: [],
   startSizing: () => {},
   reset: () => {},
 });
@@ -65,6 +67,7 @@ export function RecommendProvider({ children }: { children: React.ReactNode }) {
   const [debugStatus, setDebugStatus] = React.useState<number | null>(null);
   const [debugDuration, setDebugDuration] = React.useState<number | null>(null);
   const [progress, setProgress] = React.useState<RecommendProgressEvent | null>(null);
+  const [progressHistory, setProgressHistory] = React.useState<RecommendProgressEvent[]>([]);
 
   const abortRef = React.useRef<AbortController | null>(null);
   const timerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
@@ -119,6 +122,7 @@ export function RecommendProvider({ children }: { children: React.ReactNode }) {
     setDebugStatus(null);
     setDebugDuration(null);
     setProgress(null);
+    setProgressHistory([]);
 
     const t0 = performance.now();
 
@@ -165,6 +169,7 @@ export function RecommendProvider({ children }: { children: React.ReactNode }) {
             }
           } else {
             setProgress(event);
+            setProgressHistory(history => [...history, event]);
           }
         };
 
@@ -206,11 +211,12 @@ export function RecommendProvider({ children }: { children: React.ReactNode }) {
     setDebugStatus(null);
     setDebugDuration(null);
     setProgress(null);
+    setProgressHistory([]);
   }, []);
 
   const value = React.useMemo<RecommendState>(
-    () => ({ params, isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, progress, startSizing, reset }),
-    [params, isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, progress, startSizing, reset]
+    () => ({ params, isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, progress, progressHistory, startSizing, reset }),
+    [params, isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, progress, progressHistory, startSizing, reset]
   );
 
   return (
