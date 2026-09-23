@@ -442,6 +442,16 @@ def _aisimulate_recommendation_config(
     from aisimulate.config.cli import CoreRecommendationConfig
 
     context_length = req.max_seq_len or req.isl + req.osl
+    window_max_gpus = req.max_candidate_gpus or max_candidate_gpus or _max_candidate_gpus()
+    # A one-GPU total window cannot contain a disaggregated deployment: it
+    # requires at least one prefill and one decode GPU. Narrow windows also
+    # need a small trial budget so incremental search does not spend the full
+    # per-window timeout on redundant optimizer trials.
+    modes = ["aggregated"] if window_max_gpus == 1 else ["aggregated", "disaggregated"]
+    max_trials = 1 if window_max_gpus == 1 else 4 if req.max_candidate_gpus is not None else 8
+    parallelism = 1 if window_max_gpus == 1 else 2 if req.max_candidate_gpus is not None else 4
+    candidate_timeout_seconds = 15 if req.max_candidate_gpus is not None else 30
+    concurrency = int(req.target_concurrency or 1)
     load = (
         {"type": "constant_rate", "requests_per_second": req.target_request_rate}
         if req.target_request_rate is not None
@@ -451,7 +461,7 @@ def _aisimulate_recommendation_config(
         "traffic": {
             "source": {"type": "synthetic", "input_tokens": req.isl, "output_tokens": req.osl},
             "load": load,
-            "stop": {"requests": max(32, int(req.target_concurrency or 1) * 4)},
+            "stop": {"requests": max(4, min(32, concurrency * 4))},
         },
         "engine": {
             "model": model_path or req.model_path,
@@ -460,7 +470,7 @@ def _aisimulate_recommendation_config(
             "backend_version": req.backend_version,
             "database_mode": req.database_mode,
             "context_length": context_length,
-            "mode": {"choices": ["aggregated", "disaggregated"]},
+            "mode": {"choices": modes},
             "workers": {
                 "aggregated": {"parallelism": {"preset": "default"}},
                 "prefill": {
@@ -484,15 +494,15 @@ def _aisimulate_recommendation_config(
             "target": "min_gpus",
             "constraints": {
                 "min_candidate_gpus": req.min_candidate_gpus,
-                "max_candidate_gpus": req.max_candidate_gpus or max_candidate_gpus or _max_candidate_gpus(),
+                "max_candidate_gpus": window_max_gpus,
                 **({"min_goodput_rps": req.target_request_rate} if req.target_request_rate is not None else {}),
             },
         },
         "optimizer": {
             "algorithm": "random",
-            "max_trials": 8,
-            "parallelism": 4,
-            "candidate_timeout_seconds": 30,
+            "max_trials": max_trials,
+            "parallelism": parallelism,
+            "candidate_timeout_seconds": candidate_timeout_seconds,
         },
     }
     return CoreRecommendationConfig.model_validate(raw)

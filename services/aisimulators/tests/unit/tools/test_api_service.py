@@ -156,6 +156,16 @@ class TestRecommend:
         assert config.optimization.constraints.min_candidate_gpus == 2
         assert config.optimization.constraints.max_candidate_gpus == 4
 
+    def test_one_gpu_window_avoids_disaggregated_trials(self):
+        body = {**VALID_RECOMMEND_BODY, "target_concurrency": 1, "min_candidate_gpus": 1, "max_candidate_gpus": 1}
+        request = app_module.RecommendRequest.model_validate(body)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.engine.mode.choices == ["aggregated"]
+        assert config.optimizer.max_trials == 1
+        assert config.optimizer.parallelism == 1
+        assert config.optimizer.candidate_timeout_seconds == 15
+
     @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_success(self, mock_recommend):
         mock_recommend.return_value = make_mock_recommendation_result()
