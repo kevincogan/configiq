@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { RecommendRequestSchema } from '@/lib/api/schemas'
-import { callRecommend, generateRequestId } from '@/lib/api/recommend'
+import { callRecommend, generateRequestId, incrementalRecommend, type RecommendProgressEvent } from '@/lib/api/recommend'
 import { gatewayTimeoutSeconds } from '@/lib/api/timeout'
 
 const ERROR_STATUS_MAP: Record<string, number> = {
@@ -63,6 +63,68 @@ async function proxyToGateway(body: Record<string, unknown>, include?: string): 
   }
 }
 
+function streamRecommendation(
+  request: ReturnType<typeof RecommendRequestSchema.parse>,
+  requestSignal: AbortSignal,
+): NextResponse {
+  const encoder = new TextEncoder()
+  const abortController = new AbortController()
+  if (requestSignal.aborted) abortController.abort()
+  let closed = false
+  const abort = () => abortController.abort()
+  requestSignal.addEventListener('abort', abort, { once: true })
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (event: RecommendProgressEvent) => {
+        if (closed) return
+        controller.enqueue(encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`))
+      }
+
+      const finish = () => {
+        if (closed) return
+        closed = true
+        controller.close()
+      }
+
+      try {
+        for await (const event of incrementalRecommend(request, abortController.signal)) send(event)
+        finish()
+      } catch (err: unknown) {
+        if (!abortController.signal.aborted) {
+          send({
+            type: 'completed',
+            response: {
+              requestId: generateRequestId(),
+              status: 'failed',
+              error: {
+                code: 'INTERNAL_ERROR',
+                message: err instanceof Error ? err.message : 'An unexpected error occurred',
+              },
+            },
+          })
+        }
+        finish()
+      } finally {
+        requestSignal.removeEventListener('abort', abort)
+      }
+    },
+    cancel() {
+      closed = true
+      abortController.abort()
+      requestSignal.removeEventListener('abort', abort)
+    },
+  })
+
+  return new NextResponse(stream, {
+    status: 200,
+    headers: {
+      'Cache-Control': 'no-cache, no-store',
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'X-Accel-Buffering': 'no',
+    },
+  })
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -77,6 +139,9 @@ export async function POST(req: NextRequest) {
     }
 
     const validated = RecommendRequestSchema.parse(body)
+    if (req.headers.get('accept')?.includes('text/event-stream')) {
+      return streamRecommendation(validated, req.signal)
+    }
     const result = await callRecommend(validated)
 
     if (result.status === 'failed') {
@@ -120,6 +185,7 @@ export async function POST(req: NextRequest) {
     )
   }
 }
+
 
 export async function OPTIONS() {
   return new NextResponse(null, {

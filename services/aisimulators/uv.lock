@@ -27,8 +27,8 @@ wheels = [
 
 [[package]]
 name = "aisimulate"
-version = "0.12.0"
-source = { url = "https://github.com/redhat-performance/aisimulate/releases/download/deploy-api-v0.12.0%2B9de2b79e/aisimulate-0.12.0-cp311-abi3-manylinux_2_28_x86_64.whl" }
+version = "0.13.0"
+source = { url = "https://github.com/redhat-performance/aisimulate/releases/download/deploy-api-v0.13.0%2B7f1efbc1/aisimulate-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl" }
 dependencies = [
     { name = "bokeh", version = "3.9.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "bokeh", version = "3.10.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -60,7 +60,7 @@ dependencies = [
     { name = "tqdm" },
 ]
 wheels = [
-    { url = "https://github.com/redhat-performance/aisimulate/releases/download/deploy-api-v0.12.0%2B9de2b79e/aisimulate-0.12.0-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:d5a279b775a9dbb427b1cc31eb047bd6b574f673ace3e4bee9b6252ea2963f68" },
+    { url = "https://github.com/redhat-performance/aisimulate/releases/download/deploy-api-v0.13.0%2B7f1efbc1/aisimulate-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:4a95c49147345ed635c4ab720feb13c554efc1679771de5a65ff2758636349a0" },
 ]
 
 [package.metadata]
@@ -144,7 +144,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aisimulate", url = "https://github.com/redhat-performance/aisimulate/releases/download/deploy-api-v0.12.0%2B9de2b79e/aisimulate-0.12.0-cp311-abi3-manylinux_2_28_x86_64.whl" },
+    { name = "aisimulate", url = "https://github.com/redhat-performance/aisimulate/releases/download/deploy-api-v0.13.0%2B7f1efbc1/aisimulate-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl" },
     { name = "configiq", editable = "../configiq-py" },
     { name = "configiq", extras = ["mcp"], marker = "extra == 'mcp'", editable = "../configiq-py" },
     { name = "configiq", extras = ["otel"], marker = "extra == 'otel'", editable = "../configiq-py" },

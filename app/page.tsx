@@ -44,10 +44,10 @@ const tools = [
     icon: <ChartBarIcon />,
   },
   {
-    title: "Performance",
+    title: "Predict performance",
     description:
       "Estimate TTFT, TPOT, and throughput for your model and parallelism configuration.",
-    href: "/performance",
+    href: "/predict",
     icon: <BoltIcon />,
   },
   // Hidden pending aicostings API

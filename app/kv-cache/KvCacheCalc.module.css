@@ -1,6 +1,6 @@
 /* ============================================================================
    KV Cache Calculator — UI styling
-   Follows QuickEstimate.module.css / routing.module.css patterns.
+   Follows Performance.module.css / routing.module.css patterns.
    Uses --gc-* theme tokens with safe fallbacks.
    NO font-size below 11.5px; no text lighter than --gc-text-2.
    ============================================================================ */

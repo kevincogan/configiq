@@ -6,9 +6,8 @@ as HTTP endpoints. ConfigIQ's `app/api/*` proxy routes call this service.
 
 This directory contains **only** the REST wrapper. The SDK itself is not vendored
 here — it is installed as a single wheel published by the Red Hat fork's GitHub
-Releases. That one `aisimulate` wheel bundles the Rust-compiled core and provides
-the `aiconfigurator` / `aiconfigurator_core` compatibility namespaces this
-service still imports.
+Releases. That one `aisimulate` wheel bundles the Rust-compiled core and exposes
+the `aisimulate` and `aisimulate_core` APIs used by this service.
 
 ## Endpoints
 

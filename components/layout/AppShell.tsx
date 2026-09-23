@@ -176,9 +176,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             />
             <NavItemWithIcon
               icon={BoltIcon}
-              label="Performance"
-              href="/performance"
-              isActive={pathname === "/performance"}
+              label="Predict performance"
+              href="/predict"
+              isActive={pathname === "/predict"}
             />
             <NavItemWithIcon
               icon={CubesIcon}

@@ -14,9 +14,10 @@ import DollarSignIcon from '@patternfly/react-icons/dist/esm/icons/dollar-sign-i
 import { InfoStrip, InfoStripAction } from '@/components/ui/InfoStrip';
 import { DebugPanel } from '@/components/DebugPanel/DebugPanel';
 
-import styles from './AdvancedEstimate.module.css';
+import styles from './Sizing.module.css';
 import { fetchModelConfig } from '@/lib/huggingface/fetch-config';
 import { useRecommend } from '@/contexts/RecommendContext';
+import type { RecommendProgressEvent } from '@/lib/api/recommend';
 import { isMoeConfig, type PhaseConfig } from '@/lib/api/recommend';
 import { useCatalog } from '@/lib/hooks/useCatalog';
 import { useSettings } from '@/contexts/SettingsContext';
@@ -33,7 +34,7 @@ function modelSuggestions(): string {
   return names.length > 0 ? names.join(', ') : 'Nemotron, DeepSeek V4, Gemma 4, Kimi';
 }
 import { GpuChipLoader } from '@/components/GpuChipLoader/GpuChipLoader';
-import { Term } from '@/app/performance/quickEstimateHelpers';
+import { Term } from '@/app/predict/performanceHelpers';
 import { HOURS_PER_MONTH, AMORT_MONTHS_5YR } from '@/lib/utils/format';
 
 
@@ -208,7 +209,7 @@ function friendlyErrorHint(code: string | null): string {
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export default function AdvancedEstimate() {
+export default function Sizing() {
   const { hydrated, hfToken, defaultModel: settingsDefaultModel, inferenceBackend, costingsEnabled, pricingSource, preferredCloudProvider } = useSettings();
   const costings = useCostings(costingsEnabled, pricingSource);
   const { modelOptions: catalogModels, gpuOptions: catalogGpus, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
@@ -231,6 +232,9 @@ export default function AdvancedEstimate() {
   const [gpuSystem, setGpuSystem] = React.useState(() => getAppConfig().defaultSystem);
   const [isl, setIsl] = React.useState(2048);
   const [osl, setOsl] = React.useState(128);
+  const [maxSeqLen, setMaxSeqLen] = React.useState<number | null>(null);
+  const [prefillMaxSeqLen, setPrefillMaxSeqLen] = React.useState<number | null>(null);
+  const [decodeMaxSeqLen, setDecodeMaxSeqLen] = React.useState<number | null>(null);
   const [ttft, setTtft] = React.useState(1000);
   const [tpot, setTpot] = React.useState(30);
   const [targetConcurrency, setTargetConcurrency] = React.useState(1);
@@ -241,7 +245,7 @@ export default function AdvancedEstimate() {
   const [modelStatus, setModelStatus] = React.useState<'idle' | 'supported' | 'catalog' | 'fetching' | 'fetched' | 'error'>('idle');
 
   // GPU sizer (persistent across navigation)
-  const { isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, startSizing } = useRecommend();
+  const { isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, progressHistory, startSizing } = useRecommend();
   const [debugOpen, setDebugOpen] = React.useState(false);
 
   // Additional constraints accordion
@@ -249,6 +253,9 @@ export default function AdvancedEstimate() {
 
   const [islInput, setIslInput] = React.useState('2048');
   const [oslInput, setOslInput] = React.useState('128');
+  const [maxSeqLenInput, setMaxSeqLenInput] = React.useState('');
+  const [prefillMaxSeqLenInput, setPrefillMaxSeqLenInput] = React.useState('');
+  const [decodeMaxSeqLenInput, setDecodeMaxSeqLenInput] = React.useState('');
   const [ttftInput, setTtftInput] = React.useState('1000');
   const [tpotInput, setTpotInput] = React.useState('30');
   const [concurrencyInput, setConcurrencyInput] = React.useState('1');
@@ -261,6 +268,21 @@ export default function AdvancedEstimate() {
   const invalidTpot = tpotInput === '' || !Number.isFinite(Number(tpotInput)) || Number(tpotInput) <= 0;
   const invalidConcurrency = concurrencyInput === '' || parseInt(concurrencyInput, 10) < 1;
   const invalidLatency = latencyInput !== '' && (!Number.isFinite(Number(latencyInput)) || Number(latencyInput) <= 0);
+  const validSequenceLength = (value: string) => /^[1-9][0-9]*$/.test(value) && Number.isSafeInteger(Number(value));
+  const invalidMaxSeqLen = maxSeqLenInput !== '' && !validSequenceLength(maxSeqLenInput);
+  const invalidPrefillMaxSeqLen = prefillMaxSeqLenInput !== '' && !validSequenceLength(prefillMaxSeqLenInput);
+  const invalidDecodeMaxSeqLen = decodeMaxSeqLenInput !== '' && !validSequenceLength(decodeMaxSeqLenInput);
+
+  const handleSequenceLengthChange = (
+    raw: string,
+    setInput: (value: string) => void,
+    setValue: (value: number | null) => void,
+  ) => {
+    const value = raw.trim();
+    setInput(value);
+    const n = Number(value);
+    setValue(validSequenceLength(value) ? n : null);
+  };
 
   const handleIslChange = (raw: string) => {
     const digits = raw.replace(/[^0-9]/g, '');
@@ -364,12 +386,18 @@ export default function AdvancedEstimate() {
   const resetToDefaults = () => {
     applyPreset(DEFAULT_WORKLOAD);
     setRequestLatency(null); setLatencyInput('');
+    setMaxSeqLen(null); setMaxSeqLenInput('');
+    setPrefillMaxSeqLen(null); setPrefillMaxSeqLenInput('');
+    setDecodeMaxSeqLen(null); setDecodeMaxSeqLenInput('');
   };
 
   const handleCalculate = () => {
     startSizing({
       model_path: model, system: gpuSystem, isl, osl, ttft,
       tpot, target_concurrency: targetConcurrency, prefix,
+      ...(maxSeqLen != null ? { max_seq_len: maxSeqLen } : {}),
+      ...(prefillMaxSeqLen != null ? { prefill_max_seq_len: prefillMaxSeqLen } : {}),
+      ...(decodeMaxSeqLen != null ? { decode_max_seq_len: decodeMaxSeqLen } : {}),
       ...(requestLatency != null ? { request_latency: requestLatency } : {}),
       backend: inferenceBackend,
       // Send the HF config for models AISimulators can't resolve from its catalog.
@@ -432,7 +460,7 @@ export default function AdvancedEstimate() {
           <button
             className={styles.calcBtn}
             onClick={handleCalculate}
-            disabled={isLoading || !model.includes('/') || invalidISL || invalidOSL || invalidTTFT || invalidTpot || invalidConcurrency || invalidLatency}
+             disabled={isLoading || !model.includes('/') || invalidISL || invalidOSL || invalidTTFT || invalidTpot || invalidConcurrency || invalidLatency || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen}
           >
             {isLoading ? 'Calculating...' : 'Calculate'}
           </button>
@@ -543,6 +571,67 @@ export default function AdvancedEstimate() {
                 />
               </div>
             </div>
+
+            <Accordion style={{ marginTop: 16 }}>
+              <AccordionItem>
+                <AccordionToggle
+                  id="context-window-toggle"
+                  onClick={() => setExpanded(
+                    expanded.includes('context-window')
+                      ? expanded.filter(e => e !== 'context-window')
+                      : [...expanded, 'context-window']
+                  )}
+                  isExpanded={expanded.includes('context-window')}
+                >
+                  <span style={{ fontWeight: 600 }}>Context window sizing</span>
+                </AccordionToggle>
+                <AccordionContent isHidden={!expanded.includes('context-window')}>
+                  <div style={{ paddingTop: 12 }}>
+                    <div className={styles.paramGrid} style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
+                      <div>
+                        <label className={styles.fieldLabel}>Max sequence length (tokens) <Term k="maxModelLen" /></label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          className={invalidMaxSeqLen ? styles.paramInputInvalid : styles.paramInput}
+                          value={maxSeqLenInput}
+                          onChange={e => handleSequenceLengthChange(e.target.value, setMaxSeqLenInput, setMaxSeqLen)}
+                          min={1}
+                          placeholder="ISL + OSL"
+                          aria-invalid={invalidMaxSeqLen}
+                        />
+                      </div>
+                      <div>
+                        <label className={styles.fieldLabel}>Prefill length (tokens) <Term k="prefillMaxSeqLen" /></label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          className={invalidPrefillMaxSeqLen ? styles.paramInputInvalid : styles.paramInput}
+                          value={prefillMaxSeqLenInput}
+                          onChange={e => handleSequenceLengthChange(e.target.value, setPrefillMaxSeqLenInput, setPrefillMaxSeqLen)}
+                          min={1}
+                          placeholder="Optional override"
+                          aria-invalid={invalidPrefillMaxSeqLen}
+                        />
+                      </div>
+                      <div>
+                        <label className={styles.fieldLabel}>Decode length (tokens) <Term k="decodeMaxSeqLen" /></label>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          className={invalidDecodeMaxSeqLen ? styles.paramInputInvalid : styles.paramInput}
+                          value={decodeMaxSeqLenInput}
+                          onChange={e => handleSequenceLengthChange(e.target.value, setDecodeMaxSeqLenInput, setDecodeMaxSeqLen)}
+                          min={1}
+                          placeholder="Optional override"
+                          aria-invalid={invalidDecodeMaxSeqLen}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           </div>
         </div>
       )}
@@ -550,7 +639,7 @@ export default function AdvancedEstimate() {
       {/* ─── Loading ─── */}
       {isLoading && (
         <div className={styles.card}>
-          <GpuChipLoader elapsed={elapsed} timeoutSeconds={gatewayTimeout} />
+          <GpuChipLoader elapsed={elapsed} timeoutSeconds={gatewayTimeout} progressMessages={recommendProgressMessages(progressHistory)} />
         </div>
       )}
 
@@ -872,4 +961,25 @@ export default function AdvancedEstimate() {
 function StatusChip({ status }: { status: string }) {
   if (status === 'idle') return null;
   return null; // Chip is rendered inside the input wrapper instead
+}
+
+function recommendProgressMessages(progressHistory: RecommendProgressEvent[]): string[] {
+  return progressHistory.flatMap(progress => {
+    switch (progress.type) {
+      case 'search_started':
+        return [`Searching up to ${progress.maxGpus} GPUs`];
+      case 'window_started':
+        return [progress.window.minGpus === progress.window.maxGpus
+          ? `Evaluating ${progress.window.minGpus} GPU`
+          : `Evaluating ${progress.window.minGpus}–${progress.window.maxGpus} GPUs`];
+      case 'window_completed':
+        return [progress.candidateGpus == null
+          ? `${progress.window.minGpus}–${progress.window.maxGpus} GPUs — no qualifying configuration`
+          : `${progress.window.minGpus}–${progress.window.maxGpus} GPUs — provisional candidate at ${progress.candidateGpus} GPUs`];
+      case 'refining':
+        return [`Refining below ${progress.candidateGpus} GPUs: checking ${progress.window.minGpus}–${progress.window.maxGpus}`];
+      case 'completed':
+        return [];
+    }
+  });
 }

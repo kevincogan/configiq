@@ -1,6 +1,6 @@
 /* ============================================================================
-   Quick Estimate — UI styling
-   Pairs with QuickEstimate.tsx. Uses theme tokens from theme.css when present
+   Predict performance — UI styling
+   Pairs with Performance.tsx. Uses theme tokens from theme.css when present
    (--gc-*), with safe fallbacks so this renders correctly even before tokens
    are wired. NO font-size below 11.5px; no text lighter than --gc-text-2 for
    any label/value/detail.

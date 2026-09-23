@@ -25,7 +25,7 @@ This document provides comprehensive component diagrams, data flow visualization
 │                                                                 │
 │  ┌──────────────────────┐        ┌──────────────────────┐     │
 │  │  Performance Page    │        │ Shared Components    │     │
-│  │  app/performance/    │◄───────┤ components/          │     │
+│  │  app/predict/        │◄───────┤ components/          │     │
 │  │                      │        │ - ProductTour        │     │
 │  │  - Model input       │        │ - FlipTile           │     │
 │  │  - GPU selector      │        │ - Term (glossary)    │     │
@@ -210,7 +210,7 @@ Shows how data flows from user input through calculations to display.
      ▼
 ┌─────────────────────────────────────────┐
 │  Performance UI                         │
-│  (PerformanceEstimate.tsx)              │
+│  (Performance.tsx)                      │
 │                                         │
 │  React State:                           │
 │  - model = "meta-llama/..."             │
@@ -306,7 +306,7 @@ Shows how data flows from user input through calculations to display.
 > rewrite, not a rename.
 
 ```
-PerformanceEstimate.tsx
+Performance.tsx
     │
     ├─→ computeInferenceConfig (from core.ts)
     │       │
@@ -321,9 +321,9 @@ PerformanceEstimate.tsx
     │       ├─→ determineParallelismStrategy (from parallelism.ts)
     │       └─→ computeLLMDConfig (from llmd.ts)
     │
-    ├─→ FlipTile (from quickEstimateHelpers.tsx)
-    ├─→ Term (from quickEstimateHelpers.tsx)
-    ├─→ useCountUp (from quickEstimateHelpers.tsx)
+    ├─→ FlipTile (from performanceHelpers.tsx)
+    ├─→ Term (from performanceHelpers.tsx)
+    ├─→ useCountUp (from performanceHelpers.tsx)
     └─→ ProductTour (from components/ProductTour/)
 ```
 
@@ -335,11 +335,11 @@ PerformanceEstimate.tsx
 
 | Component | File | Responsibility | Status |
 |-----------|------|----------------|--------|
-| **PerformanceEstimate** | `app/performance/PerformanceEstimate.tsx` | Main page, state management, orchestrates all other components | ✅ Active |
-| **FlipTile** | `quickEstimateHelpers.tsx` | Interactive card that flips to show formulas on click/Enter | ✅ Complete |
+| **Performance** | `app/predict/Performance.tsx` | Main page, state management, orchestrates all other components | ✅ Active |
+| **FlipTile** | `performanceHelpers.tsx` | Interactive card that flips to show formulas on click/Enter | ✅ Complete |
 | **ProductTour** | `components/ProductTour/ProductTour.tsx` | Guided tour with spotlight and tooltips | ✅ Complete |
-| **Term** | `quickEstimateHelpers.tsx` | Glossary popover (? icon with explanation) | ✅ Complete |
-| **useCountUp** | `quickEstimateHelpers.tsx` | Animates numbers from 0 → target | ✅ Complete |
+| **Term** | `performanceHelpers.tsx` | Glossary popover (? icon with explanation) | ✅ Complete |
+| **useCountUp** | `performanceHelpers.tsx` | Animates numbers from 0 → target | ✅ Complete |
 
 ### Inference Engine Modules
 

@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { Popover, Button } from '@patternfly/react-core';
 import OutlinedQuestionCircleIcon from '@patternfly/react-icons/dist/esm/icons/outlined-question-circle-icon';
-import styles from './PerformanceEstimate.module.css';
+import styles from './Performance.module.css';
 
 /* ----------------------------------------------------------------------------
    Precision metadata — canonical source for bytes/param and descriptions
@@ -89,6 +89,14 @@ export const GLOSSARY: Record<string, { title: string; body: string }> = {
   maxModelLen: {
     title: 'max_model_len',
     body: 'Maximum total sequence length (input + output tokens) the engine will allow. Set to "auto" to use the model\'s native context window from its config. Lower values save KV cache memory.',
+  },
+  prefillMaxSeqLen: {
+    title: 'Prefill max sequence length',
+    body: 'Maximum prompt-plus-output context reserved for prefill workers. Lower values reduce the KV cache allocation for the prefill pool when serving a specific context tier.',
+  },
+  decodeMaxSeqLen: {
+    title: 'Decode max sequence length',
+    body: 'Maximum prompt-plus-output context reserved for decode workers. Lower values reduce the KV cache allocation for the decode pool when serving a specific context tier.',
   },
   chunkedPrefill: {
     title: 'enable_chunked_prefill',

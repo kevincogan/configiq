@@ -9,13 +9,10 @@ requiring the Rust native extension or performance databases.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import numpy as np
-import pandas as pd
 import pytest
 from configiq.systems import load_device_names_from_perf_data, supported_systems
 from fastapi.testclient import TestClient
@@ -28,7 +25,7 @@ client = TestClient(app)
 
 def _sdk_available() -> bool:
     try:
-        from aiconfigurator_core.sdk.common import SupportedSystems
+        from aisimulate_core.sdk.common import SupportedSystems
         return len(SupportedSystems) > 0
     except Exception:
         return False
@@ -62,40 +59,6 @@ VALID_MEMORY_BODY = {
     "memory_fraction_value": 0.9,
 }
 
-MOCK_COLUMNS_AGG = [
-    "model", "isl", "osl", "prefix", "concurrency", "request_rate",
-    "bs", "global_bs", "ttft", "tpot", "request_latency",
-    "encoder_latency", "encoder_memory",
-    "seq/s", "seq/s/gpu", "tokens/s", "tokens/s/gpu", "tokens/s/user",
-    "num_total_gpus", "tp", "pp", "dp", "moe_tp", "moe_ep", "cp",
-    "parallel", "gemm", "kvcache", "fmha", "moe", "comm",
-    "memory", "balance_score",
-    "num_ctx_reqs", "num_gen_reqs", "num_tokens", "ctx_tokens", "gen_tokens",
-    "backend", "version", "system", "power_w",
-]
-
-MOCK_ROW = {
-    "model": "Qwen/Qwen3-32B",
-    "isl": np.int64(4000), "osl": np.int64(1000), "prefix": np.int64(0),
-    "concurrency": np.int64(48), "request_rate": 1.681,
-    "bs": np.int64(48), "global_bs": np.int64(48),
-    "ttft": 471.378, "tpot": 28.118, "request_latency": 28561.14,
-    "encoder_latency": np.int64(0), "encoder_memory": 0.0,
-    "seq/s": 1.681, "seq/s/gpu": 0.84,
-    "tokens/s": 1678.925, "tokens/s/gpu": 839.462, "tokens/s/user": 35.565,
-    "num_total_gpus": np.int64(2),
-    "tp": np.int64(2), "pp": np.int64(1), "dp": np.int64(1),
-    "moe_tp": np.int64(1), "moe_ep": np.int64(1), "cp": np.int64(1),
-    "parallel": "tp2pp1dp1etp1ep1",
-    "gemm": "bfloat16", "kvcache": "bfloat16", "fmha": "bfloat16",
-    "moe": "bfloat16", "comm": "half",
-    "memory": 64.044, "balance_score": 0.048,
-    "num_ctx_reqs": 1.0, "num_gen_reqs": 47.0,
-    "num_tokens": 4047.0, "ctx_tokens": np.int64(4000), "gen_tokens": 47.0,
-    "backend": "vllm", "version": "0.24.0", "system": "h200_sxm", "power_w": 0.0,
-    "total_gpus_needed": np.int64(2), "replicas_needed": np.int64(1),
-}
-
 MOCK_KV_CACHE_RESULT = {
     "total_gpu_capacity_bytes": 151397597184,
     "total_kv_size_bytes": 98507266457,
@@ -127,24 +90,43 @@ MOCK_SYSTEM_SPEC = {
 
 
 @dataclass
-class MockCLIResult:
-    chosen_exp: str = "agg"
-    best_configs: dict = field(default_factory=dict)
-    pareto_fronts: dict = field(default_factory=dict)
-    best_throughputs: dict = field(default_factory=dict)
-    tasks: dict = field(default_factory=dict)
-    best_latencies: dict = field(default_factory=dict)
-    raw_results: dict = field(default_factory=dict)
-    outcomes: dict = field(default_factory=dict)
+class MockCandidate:
+    used_gpus: int = 2
+    metrics: dict = field(default_factory=lambda: {
+        "ttft_ms": 471.378,
+        "tpot_ms": 28.118,
+        "output_throughput_tok_s": 1678.925,
+        "output_throughput_tok_s_per_gpu": 839.462,
+    })
+    prediction_config: dict = field(default_factory=lambda: {
+        "engine": {
+            "model": "Qwen/Qwen3-32B", "hardware": "h200_sxm",
+            "backend": "vllm", "backend_version": "0.24.0", "mode": "aggregated",
+            "workers": {"aggregated": {
+                "parallelism": {"tensor": 2, "pipeline": 1, "attention_data": 1, "replicas": 1},
+                "scheduler": {"max_sequences": 48},
+            }},
+        },
+    })
 
 
-def make_mock_cli_result(rows=None):
-    if rows is None:
-        rows = [MOCK_ROW]
-    df = pd.DataFrame(rows)
-    result = MockCLIResult()
-    result.best_configs = {"agg": df}
-    return result
+@dataclass
+class MockRecommendationResult:
+    selected_candidates: list[MockCandidate] = field(default_factory=lambda: [MockCandidate()])
+
+
+def make_mock_recommendation_result(candidates=None):
+    return MockRecommendationResult(selected_candidates=candidates or [MockCandidate()])
+
+
+@dataclass
+class MockPredictionResult:
+    summary: dict = field(default_factory=lambda: {
+        "ttft_ms": 471.378, "tpot_ms": 28.118,
+        "output_throughput_tok_s": 1678.925,
+        "output_throughput_tok_s_per_gpu": 839.462,
+    })
+    native: dict = field(default_factory=lambda: {"summary": {}})
 
 
 # ─── /recommend tests ────────────────────────────────────────────────────────
@@ -152,9 +134,57 @@ def make_mock_cli_result(rows=None):
 
 class TestRecommend:
 
-    @patch("tools.api_service.app.cli_recommend")
+    def test_recommendation_search_is_bounded(self):
+        request = app_module.RecommendRequest.model_validate(VALID_RECOMMEND_BODY)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.optimization.constraints.max_candidate_gpus == 1024
+        assert config.optimizer.max_trials == 8
+
+    def test_recommendation_search_budget_is_configurable(self, monkeypatch):
+        monkeypatch.setenv("AISIMULATORS_MAX_CANDIDATE_GPUS", "4096")
+        request = app_module.RecommendRequest.model_validate(VALID_RECOMMEND_BODY)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.optimization.constraints.max_candidate_gpus == 4096
+
+    def test_requested_gpu_window_is_clamped_to_server_budget(self, monkeypatch):
+        monkeypatch.setenv("AISIMULATORS_MAX_CANDIDATE_GPUS", "8")
+        body = {**VALID_RECOMMEND_BODY, "max_candidate_gpus": 64}
+        request = app_module.RecommendRequest.model_validate(body)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.optimization.constraints.max_candidate_gpus == 8
+
+    def test_rejects_window_lower_bound_above_effective_server_budget(self, monkeypatch):
+        monkeypatch.setenv("AISIMULATORS_MAX_CANDIDATE_GPUS", "8")
+        body = {**VALID_RECOMMEND_BODY, "min_candidate_gpus": 9, "max_candidate_gpus": 64}
+        request = app_module.RecommendRequest.model_validate(body)
+
+        with pytest.raises(ValueError, match="effective max_candidate_gpus"):
+            app_module._aisimulate_recommendation_config(request)
+
+    def test_recommendation_window_bounds_are_forwarded(self):
+        body = {**VALID_RECOMMEND_BODY, "min_candidate_gpus": 2, "max_candidate_gpus": 4}
+        request = app_module.RecommendRequest.model_validate(body)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.optimization.constraints.min_candidate_gpus == 2
+        assert config.optimization.constraints.max_candidate_gpus == 4
+
+    def test_one_gpu_window_avoids_disaggregated_trials(self):
+        body = {**VALID_RECOMMEND_BODY, "target_concurrency": 1, "min_candidate_gpus": 1, "max_candidate_gpus": 1}
+        request = app_module.RecommendRequest.model_validate(body)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.engine.mode.choices == ["aggregated"]
+        assert config.optimizer.max_trials == 1
+        assert config.optimizer.parallelism == 1
+        assert config.optimizer.candidate_timeout_seconds == 15
+
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_success(self, mock_recommend):
-        mock_recommend.return_value = make_mock_cli_result()
+        mock_recommend.return_value = make_mock_recommendation_result()
         resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
         assert resp.status_code == 200
         data = resp.json()
@@ -163,9 +193,9 @@ class TestRecommend:
         assert data["chosen_mode"] == "agg"
         assert len(data["configs"]) >= 1
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_response_fields(self, mock_recommend):
-        mock_recommend.return_value = make_mock_cli_result()
+        mock_recommend.return_value = make_mock_recommendation_result()
         resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
         cfg = resp.json()["configs"][0]
         assert cfg["tp"] == 2
@@ -178,36 +208,34 @@ class TestRecommend:
         assert cfg["tpot"] == 28.118
         assert cfg["tokens_per_second"] == 1678.925
         assert cfg["tokens_per_second_per_gpu"] == 839.462
-        assert cfg["memory"] == 64.044
+        assert cfg["memory"] is None
         assert cfg["model"] == "Qwen/Qwen3-32B"
         assert cfg["system"] == "h200_sxm"
         assert cfg["backend"] == "vllm"
         assert cfg["backend_version"] == "0.24.0"
-        assert cfg["gemm"] == "bfloat16"
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_inclusive_tpot(self, mock_recommend):
-        mock_recommend.return_value = make_mock_cli_result()
+        mock_recommend.return_value = make_mock_recommendation_result()
         body = {**VALID_RECOMMEND_BODY, "inclusive_tpot": True}
         resp = client.post("/recommend", json=body)
         assert resp.status_code == 200
         cfg = resp.json()["configs"][0]
-        # inclusive = (ttft + tpot * (osl - 1)) / osl
         expected = (471.378 + 28.118 * (1000 - 1)) / 1000
         assert cfg["tpot"] == pytest.approx(expected)
         assert cfg["ttft"] == pytest.approx(471.378)
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_inclusive_tpot_default_false(self, mock_recommend):
-        mock_recommend.return_value = make_mock_cli_result()
+        mock_recommend.return_value = make_mock_recommendation_result()
         resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
         assert resp.json()["configs"][0]["tpot"] == pytest.approx(28.118)
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_inclusive_tpot_preserves_missing_ttft(self, mock_recommend):
-        # A row without ttft cannot be transformed; tpot is returned unchanged
-        # rather than raising a TypeError on None arithmetic.
-        mock_recommend.return_value = make_mock_cli_result(rows=[{**MOCK_ROW, "ttft": np.nan}])
+        mock_recommend.return_value = make_mock_recommendation_result([
+            MockCandidate(metrics={"tpot_ms": 28.118}),
+        ])
         body = {**VALID_RECOMMEND_BODY, "inclusive_tpot": True}
         resp = client.post("/recommend", json=body)
         assert resp.status_code == 200
@@ -215,67 +243,56 @@ class TestRecommend:
         assert cfg["ttft"] is None
         assert cfg["tpot"] == pytest.approx(28.118)
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_inclusive_tpot_preserves_missing_tpot(self, mock_recommend):
-        # A row without tpot keeps the unavailable None value under inclusive_tpot.
-        mock_recommend.return_value = make_mock_cli_result(rows=[{**MOCK_ROW, "tpot": np.nan}])
+        mock_recommend.return_value = make_mock_recommendation_result([
+            MockCandidate(metrics={"ttft_ms": 471.378}),
+        ])
         body = {**VALID_RECOMMEND_BODY, "inclusive_tpot": True}
         resp = client.post("/recommend", json=body)
         assert resp.status_code == 200
         assert resp.json()["configs"][0]["tpot"] is None
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_no_serving_config_by_default(self, mock_recommend):
-        mock_recommend.return_value = make_mock_cli_result()
+        mock_recommend.return_value = make_mock_recommendation_result()
         resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
         cfg = resp.json()["configs"][0]
         assert cfg["serving_config"] is None
         assert cfg["memory_breakdown"] is None
 
-    @patch("tools.api_service.app.estimate_kv_cache")
-    @patch("tools.api_service.app.cli_recommend")
-    def test_include_config(self, mock_recommend, mock_kv):
-        mock_recommend.return_value = make_mock_cli_result()
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
+    def test_include_config(self, mock_recommend):
+        mock_recommend.return_value = make_mock_recommendation_result()
         resp = client.post("/recommend?include=config", json=VALID_RECOMMEND_BODY)
         cfg = resp.json()["configs"][0]
-        sc = cfg["serving_config"]
-        assert sc is not None
-        assert sc["backend"] == "vllm"
-        assert sc["tensor_parallel_size"] == 2
-        assert sc["max_model_len"] == 5000
-        assert sc["gpu_memory_utilization"] == 0.9
-        assert isinstance(sc["enable_chunked_prefill"], bool)
-        assert isinstance(sc["enable_prefix_caching"], bool)
+        assert cfg["serving_config"] is not None
+        assert cfg["serving_config"]["backend"] == "vllm"
+        assert cfg["serving_config"]["tensor_parallel_size"] == 2
+        assert cfg["serving_config"]["max_model_len"] == 5000
         assert cfg["memory_breakdown"] is None
 
-    @patch("tools.api_service.app.estimate_kv_cache")
-    @patch("tools.api_service.app.cli_recommend")
-    def test_include_memory(self, mock_recommend, mock_kv):
-        mock_recommend.return_value = make_mock_cli_result()
-        mock_kv.return_value = MOCK_KV_CACHE_RESULT
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
+    def test_include_memory(self, mock_recommend):
+        mock_recommend.return_value = make_mock_recommendation_result()
         resp = client.post("/recommend?include=memory", json=VALID_RECOMMEND_BODY)
         cfg = resp.json()["configs"][0]
-        mb = cfg["memory_breakdown"]
-        assert mb is not None
-        assert mb["weights_bytes"] == 32761446400
-        assert mb["activations_bytes"] == 532480000
-        assert mb["kv_cache_bytes"] == 98507266457
+        assert cfg["memory_breakdown"] is not None
         assert cfg["serving_config"] is None
 
-    @patch("tools.api_service.app.estimate_kv_cache")
-    @patch("tools.api_service.app.cli_recommend")
-    def test_include_config_and_memory(self, mock_recommend, mock_kv):
-        mock_recommend.return_value = make_mock_cli_result()
-        mock_kv.return_value = MOCK_KV_CACHE_RESULT
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
+    def test_include_config_and_memory(self, mock_recommend):
+        mock_recommend.return_value = make_mock_recommendation_result()
         resp = client.post("/recommend?include=config,memory", json=VALID_RECOMMEND_BODY)
         cfg = resp.json()["configs"][0]
         assert cfg["serving_config"] is not None
         assert cfg["memory_breakdown"] is not None
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_top_n_limits_results(self, mock_recommend):
-        rows = [MOCK_ROW.copy() for _ in range(5)]
-        mock_recommend.return_value = make_mock_cli_result(rows)
+        mock_recommend.return_value = make_mock_recommendation_result(
+            [MockCandidate() for _ in range(5)]
+        )
         body = {**VALID_RECOMMEND_BODY, "top_n": 2}
         resp = client.post("/recommend", json=body)
         assert len(resp.json()["configs"]) == 2
@@ -295,13 +312,29 @@ class TestRecommend:
         body = {**VALID_RECOMMEND_BODY}
         del body["target_concurrency"]
         body["target_request_rate"] = 10.0
-        with patch("tools.api_service.app.cli_recommend") as mock:
-            mock.return_value = make_mock_cli_result()
+        with patch("tools.api_service.app._run_aisimulate_recommendation") as mock:
+            mock.return_value = make_mock_recommendation_result()
             resp = client.post("/recommend", json=body)
             assert resp.status_code == 200
-            call_kwargs = mock.call_args.kwargs
-            assert call_kwargs["target_request_rate"] == 10.0
-            assert call_kwargs["target_concurrency"] is None
+            request = mock.call_args.args[0]
+            assert request.target_request_rate == 10.0
+            assert request.target_concurrency is None
+
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
+    def test_passes_context_window_limits(self, mock_recommend):
+        mock_recommend.return_value = make_mock_recommendation_result()
+        body = {
+            **VALID_RECOMMEND_BODY,
+            "max_seq_len": 64000,
+            "prefill_max_seq_len": 128000,
+            "decode_max_seq_len": 64000,
+        }
+        resp = client.post("/recommend", json=body)
+        assert resp.status_code == 200
+        request = mock_recommend.call_args.args[0]
+        assert request.max_seq_len == 64000
+        assert request.prefill_max_seq_len == 128000
+        assert request.decode_max_seq_len == 64000
 
     def test_requires_model_path(self):
         body = {**VALID_RECOMMEND_BODY}
@@ -315,68 +348,55 @@ class TestRecommend:
         resp = client.post("/recommend", json=body)
         assert resp.status_code == 422
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_no_config_found_returns_422(self, mock_recommend):
-        result = MockCLIResult()
-        result.best_configs = {"agg": pd.DataFrame()}
-        mock_recommend.return_value = result
+        mock_recommend.return_value = MockRecommendationResult(selected_candidates=[])
         resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
         assert resp.status_code == 422
         assert "No configuration" in resp.json()["detail"]
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_value_error_returns_422(self, mock_recommend):
         mock_recommend.side_effect = ValueError("bad input")
         resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
         assert resp.status_code == 422
         assert "bad input" in resp.json()["detail"]
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_unexpected_error_returns_500(self, mock_recommend):
         mock_recommend.side_effect = RuntimeError("internal failure")
         resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
         assert resp.status_code == 500
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_defaults_applied(self, mock_recommend):
-        mock_recommend.return_value = make_mock_cli_result()
+        mock_recommend.return_value = make_mock_recommendation_result()
         body = {"model_path": "Qwen/Qwen3-32B", "system": "h200_sxm", "target_concurrency": 32}
         resp = client.post("/recommend", json=body)
         assert resp.status_code == 200
-        call_kwargs = mock_recommend.call_args.kwargs
-        assert call_kwargs["backend"] == "vllm"
-        assert call_kwargs["isl"] == 4000
-        assert call_kwargs["osl"] == 1000
-        assert call_kwargs["ttft"] == 2000.0
-        assert call_kwargs["tpot"] == 30.0
-        assert call_kwargs["database_mode"] == "HYBRID"
-        assert call_kwargs["top_n"] == 5
+        request = mock_recommend.call_args.args[0]
+        assert request.backend == "vllm"
+        assert request.isl == 4000
+        assert request.osl == 1000
+        assert request.ttft == 2000.0
+        assert request.tpot == 30.0
+        assert request.database_mode == "HYBRID"
+        assert request.top_n == 5
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_null_fields_get_request_defaults(self, mock_recommend):
-        row = {k: None for k in MOCK_ROW}
-        row["model"] = "Qwen/Qwen3-32B"
-        row["ttft"] = 500.0
-        row["tpot"] = 25.0
-        row["concurrency"] = np.int64(32)
-        row["tokens/s"] = 1000.0
-        row["total_gpus_needed"] = np.int64(4)
-        row["replicas_needed"] = np.int64(2)
-        row["num_total_gpus"] = np.int64(2)
-        mock_recommend.return_value = make_mock_cli_result([row])
+        mock_recommend.return_value = make_mock_recommendation_result()
         resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
         cfg = resp.json()["configs"][0]
         assert cfg["system"] == "h200_sxm"
         assert cfg["backend"] == "vllm"
 
-    @patch("tools.api_service.app.estimate_kv_cache")
-    @patch("tools.api_service.app.cli_recommend")
-    def test_memory_breakdown_failure_returns_null(self, mock_recommend, mock_kv):
-        mock_recommend.return_value = make_mock_cli_result()
-        mock_kv.side_effect = ValueError("unsupported")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
+    def test_recommend_builds_memory_breakdown(self, mock_recommend):
+        mock_recommend.return_value = make_mock_recommendation_result()
         resp = client.post("/recommend?include=memory", json=VALID_RECOMMEND_BODY)
         assert resp.status_code == 200
-        assert resp.json()["configs"][0]["memory_breakdown"] is None
+        assert resp.json()["configs"][0]["memory_breakdown"] is not None
 
 
 # ─── /memory tests ───────────────────────────────────────────────────────────
@@ -688,7 +708,7 @@ class TestIntegration:
             "top_n": 1,
         })
         _skip_if_missing_perf_data(resp)
-        assert resp.status_code == 200
+        assert resp.status_code == 200, resp.text
         data = resp.json()
         assert len(data["configs"]) == 1
         cfg = data["configs"][0]
@@ -705,7 +725,7 @@ class TestIntegration:
             "top_n": 1,
         })
         _skip_if_missing_perf_data(resp)
-        assert resp.status_code == 200
+        assert resp.status_code == 200, resp.text
         cfg = resp.json()["configs"][0]
         assert cfg["serving_config"] is not None
         assert cfg["serving_config"]["tensor_parallel_size"] >= 1
@@ -776,7 +796,7 @@ class TestIntegration:
             "batch_size": 48,
         })
         _skip_if_missing_perf_data(resp)
-        assert resp.status_code == 200
+        assert resp.status_code == 200, resp.text
         data = resp.json()
         assert data["ttft"] > 0
         assert data["tpot"] > 0
@@ -792,7 +812,7 @@ class TestIntegration:
             "batch_size": 48,
         })
         _skip_if_missing_perf_data(resp)
-        assert resp.status_code == 200
+        assert resp.status_code == 200, resp.text
         cfg = resp.json()
         assert cfg["serving_config"] is not None
         assert cfg["serving_config"]["tensor_parallel_size"] == 2
@@ -803,32 +823,25 @@ class TestIntegration:
 
 class TestRecommendDisagg:
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_disagg_result_has_prefill_decode_configs(self, mock_recommend):
-        disagg_row = {
-            "model": "Qwen/Qwen3-32B", "isl": 1000, "osl": 150,
-            "concurrency": 36, "ttft": 180.157, "tpot": 24.675,
-            "tokens/s": 1348.785, "tokens/s/gpu": 674.392,
-            "num_total_gpus": 2, "total_gpus_needed": 6, "replicas_needed": 3,
-            "request_rate": 8.992, "request_latency": 3856.732,
-            "encoder_latency": 0.0, "encoder_memory": 0.0,
-            "seq/s": 8.992, "seq/s/gpu": 4.496,
-            "tokens/s/user": 40.527, "power_w": 0.0,
-            "(p)tp": np.int64(1), "(p)pp": np.int64(1), "(p)dp": np.int64(1),
-            "(p)cp": np.int64(1), "(p)bs": np.int64(1),
-            "(p)workers": np.int64(1), "(p)memory": 64.9,
-            "(p)gemm": "bfloat16", "(p)kvcache": "bfloat16",
-            "(p)fmha": "bfloat16", "(p)moe": "bfloat16", "(p)comm": "half",
-            "(p)version": "0.24.0",
-            "(d)tp": np.int64(4), "(d)pp": np.int64(1), "(d)dp": np.int64(1),
-            "(d)cp": np.int64(1), "(d)bs": np.int64(36),
-            "(d)workers": np.int64(1), "(d)memory": 70.1,
-            "(d)gemm": "bfloat16", "(d)version": "0.24.0",
-        }
-        result = make_mock_cli_result([disagg_row])
-        result.chosen_exp = "disagg_vllm"
-        result.best_configs = {"disagg_vllm": pd.DataFrame([disagg_row])}
-        mock_recommend.return_value = result
+        candidate = MockCandidate(
+            used_gpus=6,
+            metrics={"ttft_ms": 180.157, "tpot_ms": 24.675},
+            prediction_config={"engine": {
+                "model": "Qwen/Qwen3-32B", "hardware": "h200_sxm",
+                "backend": "vllm", "backend_version": "0.24.0", "mode": "disaggregated",
+                "workers": {
+                    "prefill": {"parallelism": {"tensor": 1, "pipeline": 1,
+                        "attention_data": 1, "replicas": 1},
+                        "scheduler": {"max_sequences": 1}},
+                    "decode": {"parallelism": {"tensor": 4, "pipeline": 1,
+                        "attention_data": 1, "replicas": 1},
+                        "scheduler": {"max_sequences": 36}},
+                },
+            }},
+        )
+        mock_recommend.return_value = make_mock_recommendation_result([candidate])
 
         resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
         assert resp.status_code == 200
@@ -847,11 +860,11 @@ class TestRecommendDisagg:
         assert cfg["total_gpus_needed"] == 6
         # Per-GPU peak memory is the worst-case across pools, NOT the sum
         # (each (x)memory is checked against a single GPU's capacity).
-        assert cfg["memory"] == pytest.approx(70.1)
+        assert cfg["memory"] is None
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_agg_result_has_no_prefill_decode(self, mock_recommend):
-        mock_recommend.return_value = make_mock_cli_result()
+        mock_recommend.return_value = make_mock_recommendation_result()
         resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
         assert resp.status_code == 200
         cfg = resp.json()["configs"][0]
@@ -861,19 +874,6 @@ class TestRecommendDisagg:
 
 
 # ─── /estimate tests ──────────────────────────────────────────────────────────
-
-MOCK_ESTIMATE_RESULT_RAW = {
-    "model": "Qwen/Qwen3-32B", "isl": 4000, "osl": 1000,
-    "ttft": 471.378, "tpot": 28.118, "request_latency": 28561.14,
-    "bs": np.int64(128), "global_bs": np.int64(128),
-    "tokens/s": 1678.925, "tokens/s/gpu": 839.462, "tokens/s/user": 35.565,
-    "num_total_gpus": np.int64(2),
-    "tp": np.int64(2), "pp": np.int64(1), "dp": np.int64(1),
-    "memory": 64.044,
-    "backend": "vllm", "version": "0.24.0", "system": "h200_sxm",
-    "gemm": "bfloat16", "kvcache": "bfloat16",
-    "power_w": 0.0,
-}
 
 VALID_ESTIMATE_BODY = {
     "model_path": "Qwen/Qwen3-32B",
@@ -887,17 +887,16 @@ VALID_ESTIMATE_BODY = {
 
 
 def make_mock_estimate_result():
-    mock = MagicMock()
-    mock.ttft = 471.378
-    mock.tpot = 28.118
-    mock.power_w = 0.0
-    mock.raw = MOCK_ESTIMATE_RESULT_RAW
-    return mock
+    return MockPredictionResult(summary={
+        "ttft_ms": 471.378, "tpot_ms": 28.118,
+        "output_throughput_tok_s": 1678.925,
+        "output_throughput_tok_s_per_gpu": 839.462,
+    })
 
 
 class TestEstimate:
 
-    @patch("tools.api_service.app.cli_estimate")
+    @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_success(self, mock_estimate):
         mock_estimate.return_value = make_mock_estimate_result()
         resp = client.post("/estimate", json=VALID_ESTIMATE_BODY)
@@ -910,7 +909,7 @@ class TestEstimate:
         assert data["serving_config"] is None
         assert data["memory_breakdown"] is None
 
-    @patch("tools.api_service.app.cli_estimate")
+    @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_include_config(self, mock_estimate):
         mock_estimate.return_value = make_mock_estimate_result()
         resp = client.post("/estimate?include=config", json=VALID_ESTIMATE_BODY)
@@ -920,7 +919,7 @@ class TestEstimate:
         assert sc["tensor_parallel_size"] == 2
 
     @patch("tools.api_service.app.estimate_kv_cache")
-    @patch("tools.api_service.app.cli_estimate")
+    @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_include_memory(self, mock_estimate, mock_kv):
         mock_estimate.return_value = make_mock_estimate_result()
         mock_kv.return_value = MOCK_KV_CACHE_RESULT
@@ -931,7 +930,7 @@ class TestEstimate:
         assert mb["weights_bytes"] == 32761446400
 
     @patch("tools.api_service.app.estimate_kv_cache")
-    @patch("tools.api_service.app.cli_estimate")
+    @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_include_config_and_memory(self, mock_estimate, mock_kv):
         mock_estimate.return_value = make_mock_estimate_result()
         mock_kv.return_value = MOCK_KV_CACHE_RESULT
@@ -940,30 +939,24 @@ class TestEstimate:
         assert resp.json()["serving_config"] is not None
         assert resp.json()["memory_breakdown"] is not None
 
-    @patch("tools.api_service.app.cli_estimate")
+    @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_calls_sdk_with_correct_params(self, mock_estimate):
         mock_estimate.return_value = make_mock_estimate_result()
         client.post("/estimate", json=VALID_ESTIMATE_BODY)
-        kwargs = mock_estimate.call_args.kwargs
-        assert kwargs["system_name"] == "h200_sxm"
-        assert kwargs["backend_name"] == "vllm"
-        assert kwargs["tp_size"] == 2
-        assert kwargs["batch_size"] == 128
+        request, include = mock_estimate.call_args.args
+        assert request.system == "h200_sxm"
+        assert request.backend == "vllm"
+        assert request.tp_size == 2
+        assert request.batch_size == 128
+        assert include == set()
 
-    @patch("tools.api_service.app.cli_estimate")
+    @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_disagg_mode(self, mock_estimate):
-        mock = MagicMock()
-        mock.ttft = 500.0
-        mock.tpot = 30.0
-        mock.power_w = 0.0
-        mock.raw = {
-            "ttft": 500.0, "tpot": 30.0, "request_latency": 30000.0,
-            "tokens/s": 1000.0, "tokens/s/gpu": 250.0, "tokens/s/user": 40.0,
-            "bs": np.int64(64), "system": "h200_sxm", "backend": "vllm",
-            "version": "0.24.0", "gemm": "bfloat16", "kvcache": "bfloat16",
-            "(p)memory": 60.0, "(d)memory": 72.5,
-        }
-        mock_estimate.return_value = mock
+        mock_estimate.return_value = MockPredictionResult(
+            summary={"ttft_ms": 500.0, "tpot_ms": 30.0,
+                     "output_throughput_tok_s": 1000.0,
+                     "output_throughput_tok_s_per_gpu": 250.0}
+        )
         body = {
             **VALID_ESTIMATE_BODY,
             "mode": "disagg",
@@ -984,12 +977,13 @@ class TestEstimate:
         assert data["decode_config"]["tp"] == 4
         assert data["decode_config"]["batch_size"] == 64
         # Per-GPU peak is the worst case across pools, not summed.
-        assert data["memory"] == pytest.approx(72.5)
+        assert data["memory"] is None
         # SDK invoked in disagg mode with the per-role params.
-        kwargs = mock_estimate.call_args.kwargs
-        assert kwargs["mode"] == "disagg"
-        assert kwargs["prefill_num_workers"] == 4
-        assert kwargs["decode_tp_size"] == 4
+        request, include = mock_estimate.call_args.args
+        assert request.mode == "disagg"
+        assert request.prefill_num_workers == 4
+        assert request.decode_tp_size == 4
+        assert include == set()
 
     def test_invalid_mode_rejected(self):
         body = {**VALID_ESTIMATE_BODY, "mode": "bogus"}
@@ -1008,26 +1002,31 @@ class TestEstimate:
         resp = client.post("/estimate", json=body)
         assert resp.status_code == 422
 
-    @patch("tools.api_service.app.cli_estimate")
+    @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_value_error_returns_422(self, mock_estimate):
         mock_estimate.side_effect = ValueError("unsupported model/backend/GPU for estimation")
         resp = client.post("/estimate", json=VALID_ESTIMATE_BODY)
         assert resp.status_code == 422
 
-    @patch("tools.api_service.app.cli_estimate")
+    @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_unexpected_error_returns_500(self, mock_estimate):
         mock_estimate.side_effect = RuntimeError("crash")
         resp = client.post("/estimate", json=VALID_ESTIMATE_BODY)
         assert resp.status_code == 500
 
-    @patch("tools.api_service.app.cli_estimate")
-    def test_model_config_accepted(self, mock_estimate):
-        mock_estimate.return_value = make_mock_estimate_result()
-        body = {**VALID_ESTIMATE_BODY, "model_config": {"hidden_size": 8192, "architectures": ["LlamaForCausalLM"]}}
-        resp = client.post("/estimate", json=body)
-        assert resp.status_code == 200
+    @patch("aisimulate.predict.run_prediction")
+    @patch("tools.api_service.app._aisimulate_runner_factory")
+    def test_model_config_is_forwarded_to_prediction(self, mock_factory, mock_run):
+        def check(config, **_kwargs):
+            assert Path(config.engine.model, "config.json").is_file()
+            return make_mock_estimate_result()
 
-    @patch("tools.api_service.app.cli_estimate")
+        mock_run.side_effect = check
+        body = {**VALID_ESTIMATE_BODY, "model_config": {"hidden_size": 8192, "architectures": ["LlamaForCausalLM"]}}
+        request = app_module.EstimateRequest.model_validate(body)
+        app_module._run_aisimulate_prediction(request, set())
+
+    @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_inclusive_tpot(self, mock_estimate):
         mock_estimate.return_value = make_mock_estimate_result()
         body = {**VALID_ESTIMATE_BODY, "inclusive_tpot": True}
@@ -1039,7 +1038,7 @@ class TestEstimate:
         assert data["tpot"] == pytest.approx(expected)
         assert data["ttft"] == pytest.approx(471.378)
 
-    @patch("tools.api_service.app.cli_estimate")
+    @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_inclusive_tpot_default_false(self, mock_estimate):
         mock_estimate.return_value = make_mock_estimate_result()
         resp = client.post("/estimate", json=VALID_ESTIMATE_BODY)
@@ -1050,12 +1049,17 @@ class TestEstimate:
 
 class TestModelConfigPassthrough:
 
-    @patch("tools.api_service.app.cli_recommend")
-    def test_recommend_accepts_model_config(self, mock_recommend):
-        mock_recommend.return_value = make_mock_cli_result()
+    @patch("aisimulate.recommend.run_recommendation")
+    @patch("tools.api_service.app._aisimulate_runner_factory")
+    def test_recommend_model_config_is_forwarded(self, mock_factory, mock_run):
+        def check(config, **_kwargs):
+            assert Path(config.engine.model, "config.json").is_file()
+            return make_mock_recommendation_result()
+
+        mock_run.side_effect = check
         body = {**VALID_RECOMMEND_BODY, "model_config": {"hidden_size": 8192, "architectures": ["LlamaForCausalLM"]}}
-        resp = client.post("/recommend", json=body)
-        assert resp.status_code == 200
+        request = app_module.RecommendRequest.model_validate(body)
+        app_module._run_aisimulate_recommendation(request)
 
     @patch("tools.api_service.app.estimate_kv_cache")
     def test_memory_accepts_model_config(self, mock_kv):
@@ -1064,37 +1068,25 @@ class TestModelConfigPassthrough:
         resp = client.post("/memory", json=body)
         assert resp.status_code == 200
 
-    @patch("tools.api_service.app.cli_recommend")
-    def test_empty_model_config_falls_back_to_hf_resolution(self, mock_recommend):
-        # An empty dict must not be written as a config.json; the SDK should
-        # receive the original model path and resolve it from HuggingFace.
-        mock_recommend.return_value = make_mock_cli_result()
+    @patch("aisimulate.recommend.run_recommendation")
+    @patch("tools.api_service.app._aisimulate_runner_factory")
+    def test_empty_model_config_is_ignored(self, mock_factory, mock_run):
+        def check(config, **_kwargs):
+            assert config.engine.model == "Qwen/Qwen3-32B"
+            return make_mock_recommendation_result()
+
+        mock_run.side_effect = check
         body = {**VALID_RECOMMEND_BODY, "model_config": {}}
-        resp = client.post("/recommend", json=body)
-        assert resp.status_code == 200
-        assert mock_recommend.call_args.kwargs["model_path"] == "Qwen/Qwen3-32B"
+        request = app_module.RecommendRequest.model_validate(body)
+        app_module._run_aisimulate_recommendation(request)
 
-    @patch("tools.api_service.app.cli_recommend")
-    def test_invalid_model_config_returns_422(self, mock_recommend):
-        # A non-empty but incomplete config (e.g. Swagger's placeholder) is
-        # written to a temp config.json and forwarded to the SDK, which raises
-        # KeyError('architectures'). Verify both that the payload reached the SDK
-        # via a config file and that the KeyError surfaces as a clear 422.
-        forwarded = {}
-
-        def _check_then_raise(*args, **kwargs):
-            config_path = Path(kwargs["model_path"]) / "config.json"
-            forwarded["config"] = json.loads(config_path.read_text())
-            raise KeyError("architectures")
-
-        mock_recommend.side_effect = _check_then_raise
+    def test_invalid_model_config_reaches_aisimulate(self):
         body = {**VALID_RECOMMEND_BODY, "model_config": {"additionalProp1": {}}}
-        resp = client.post("/recommend", json=body)
-        assert forwarded["config"] == {"additionalProp1": {}}
-        assert resp.status_code == 422
-        detail = resp.json()["detail"]
-        assert "model_config" in detail
-        assert "architectures" in detail
+        request = app_module.RecommendRequest.model_validate(body)
+        with patch("aisimulate.recommend.run_recommendation", side_effect=ValueError("invalid model config")), pytest.raises(
+            ValueError, match="invalid model config"
+        ):
+            app_module._run_aisimulate_recommendation(request)
 
 
 class TestOpenTelemetry:
@@ -1141,7 +1133,7 @@ class TestMCPServer:
         assert "/models" in paths
         assert "/recommend" in paths
 
-    @patch("tools.api_service.app.cli_recommend")
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_mcp_tools_wrap_api_endpoints(self, mock_recommend):
         """MCP tools are properly registered when MCP is available."""
         if not app_module._MCP:

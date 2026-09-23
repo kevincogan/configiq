@@ -1,13 +1,16 @@
 'use client';
 
 import * as React from 'react';
-import type { RecommendResult } from '@/lib/api/recommend';
+import type { RecommendProgressEvent, RecommendResult } from '@/lib/api/recommend';
 
 interface RecommendParams {
   model_path: string;
   system: string;
   isl: number;
   osl: number;
+  max_seq_len?: number;
+  prefill_max_seq_len?: number;
+  decode_max_seq_len?: number;
   ttft: number;
   tpot?: number;
   backend?: string;
@@ -29,6 +32,8 @@ interface RecommendState {
   debugResponse: Record<string, unknown> | null;
   debugStatus: number | null;
   debugDuration: number | null;
+  progress: RecommendProgressEvent | null;
+  progressHistory: RecommendProgressEvent[];
   startSizing: (params: RecommendParams) => void;
   reset: () => void;
 }
@@ -44,6 +49,8 @@ const RecommendContext = React.createContext<RecommendState>({
   debugResponse: null,
   debugStatus: null,
   debugDuration: null,
+  progress: null,
+  progressHistory: [],
   startSizing: () => {},
   reset: () => {},
 });
@@ -59,6 +66,8 @@ export function RecommendProvider({ children }: { children: React.ReactNode }) {
   const [debugResponse, setDebugResponse] = React.useState<Record<string, unknown> | null>(null);
   const [debugStatus, setDebugStatus] = React.useState<number | null>(null);
   const [debugDuration, setDebugDuration] = React.useState<number | null>(null);
+  const [progress, setProgress] = React.useState<RecommendProgressEvent | null>(null);
+  const [progressHistory, setProgressHistory] = React.useState<RecommendProgressEvent[]>([]);
 
   const abortRef = React.useRef<AbortController | null>(null);
   const timerRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
@@ -91,6 +100,9 @@ export function RecommendProvider({ children }: { children: React.ReactNode }) {
       tpot: p.tpot ?? 30,
       target_concurrency: p.target_concurrency ?? 32,
     };
+    if (p.max_seq_len != null) requestBody.max_seq_len = p.max_seq_len;
+    if (p.prefill_max_seq_len != null) requestBody.prefill_max_seq_len = p.prefill_max_seq_len;
+    if (p.decode_max_seq_len != null) requestBody.decode_max_seq_len = p.decode_max_seq_len;
     if (p.backend) requestBody.backend = p.backend;
     if (p.target_request_rate != null) {
       delete requestBody.target_concurrency;
@@ -109,41 +121,81 @@ export function RecommendProvider({ children }: { children: React.ReactNode }) {
     setDebugResponse(null);
     setDebugStatus(null);
     setDebugDuration(null);
+    setProgress(null);
+    setProgressHistory([]);
 
     const t0 = performance.now();
 
-    fetch('/api/recommend', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    })
-      .then(res => {
-        if (!controller.signal.aborted) {
-          setDebugStatus(res.status);
+    const run = async () => {
+      try {
+        const res = await fetch('/api/recommend', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+          body: JSON.stringify(requestBody),
+          signal: controller.signal,
+        });
+        if (!controller.signal.aborted) setDebugStatus(res.status);
+        if (!res.ok) {
+          const data = await res.json().catch(() => null) as Record<string, unknown> | null;
+          const error = data?.error as Record<string, unknown> | undefined;
+          if (!controller.signal.aborted) {
+            setDebugResponse(data ?? { status: res.status });
+            setError(typeof error?.message === 'string' ? error.message : `Recommendation request failed (${res.status})`);
+            setErrorCode(typeof error?.code === 'string' ? error.code : 'NETWORK_ERROR');
+            setDebugDuration(Math.round(performance.now() - t0));
+          }
+          return;
         }
-        return res.json();
-      })
-      .then(data => {
-        if (controller.signal.aborted) return;
-        setDebugResponse(data as Record<string, unknown>);
-        setDebugDuration(Math.round(performance.now() - t0));
-        if (data.status === 'failed') {
-          setError(data.error?.message || 'Unknown error');
-          setErrorCode(data.error?.code || 'UNKNOWN');
-        } else {
-          setResult(data as RecommendResult);
+        if (!res.body) throw new Error('Recommendation stream unavailable');
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let completed = false;
+        const handleEvent = (raw: string) => {
+          const dataLine = raw.split('\n').find(line => line.startsWith('data: '));
+          if (!dataLine) return;
+          const event = JSON.parse(dataLine.slice(6)) as RecommendProgressEvent;
+          if (event.type === 'completed') {
+            completed = true;
+            const response = event.response;
+            setDebugResponse(response as unknown as Record<string, unknown>);
+            setDebugDuration(Math.round(performance.now() - t0));
+            if (response.status === 'failed') {
+              setError(response.error.message);
+              setErrorCode(response.error.code);
+            } else {
+              setResult(response);
+            }
+          } else {
+            setProgress(event);
+            setProgressHistory(history => [...history, event]);
+          }
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          buffer += decoder.decode(value, { stream: !done });
+          const events = buffer.split('\n\n');
+          buffer = events.pop() ?? '';
+          events.forEach(handleEvent);
+          if (done) break;
         }
-      })
-      .catch(err => {
+        if (!completed && !controller.signal.aborted) {
+          setError('Recommendation stream ended before a result was received');
+          setErrorCode('NETWORK_ERROR');
+          setDebugDuration(Math.round(performance.now() - t0));
+        }
+      } catch (err: unknown) {
         if (err instanceof DOMException && err.name === 'AbortError') return;
         setDebugDuration(Math.round(performance.now() - t0));
         setError(err instanceof Error ? err.message : 'Network error');
         setErrorCode('NETWORK_ERROR');
-      })
-      .finally(() => {
+      } finally {
         if (!controller.signal.aborted) setIsLoading(false);
-      });
+      }
+    };
+    void run();
   }, []);
 
   const reset = React.useCallback(() => {
@@ -158,11 +210,13 @@ export function RecommendProvider({ children }: { children: React.ReactNode }) {
     setDebugResponse(null);
     setDebugStatus(null);
     setDebugDuration(null);
+    setProgress(null);
+    setProgressHistory([]);
   }, []);
 
   const value = React.useMemo<RecommendState>(
-    () => ({ params, isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, startSizing, reset }),
-    [params, isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, startSizing, reset]
+    () => ({ params, isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, progress, progressHistory, startSizing, reset }),
+    [params, isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, progress, progressHistory, startSizing, reset]
   );
 
   return (

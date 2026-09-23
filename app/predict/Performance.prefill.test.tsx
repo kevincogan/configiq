@@ -62,7 +62,7 @@ vi.mock('@/components/ui/GpuSystemInput', () => ({
   ),
 }));
 
-vi.mock('./quickEstimateHelpers', () => ({
+vi.mock('./performanceHelpers', () => ({
   Term: ({ children }: React.PropsWithChildren) => <>{children}</>,
   FlipTile: ({ children }: React.PropsWithChildren) => <>{children}</>,
   Sparkline: () => null,
@@ -76,7 +76,7 @@ vi.mock('@/components/ui/InfoStrip', () => ({
   InfoStripAction: ({ children }: React.PropsWithChildren) => <span>{children}</span>,
 }));
 
-import PerformanceEstimate from './PerformanceEstimate';
+import Performance from './Performance';
 
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
@@ -105,19 +105,19 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
-  window.history.replaceState({}, '', '/performance');
+  window.history.replaceState({}, '', '/predict');
   vi.unstubAllGlobals();
 });
 
 async function mountAt(search: string) {
-  window.history.replaceState({}, '', `/performance${search}`);
+  window.history.replaceState({}, '', `/predict${search}`);
   await act(async () => {
-    root.render(<PerformanceEstimate />);
+    root.render(<Performance />);
     await Promise.resolve();
   });
   return {
-    model: container.querySelector<HTMLInputElement>('#qe-model'),
-    gpu: container.querySelector<HTMLSelectElement>('#qe-gpu'),
+    model: container.querySelector<HTMLInputElement>('#predict-performance-model'),
+    gpu: container.querySelector<HTMLSelectElement>('#predict-performance-gpu'),
   };
 }
 

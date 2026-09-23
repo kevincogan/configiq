@@ -6,6 +6,15 @@ const nextConfig = {
   // Running `next build` while `next dev` is active must not replace the CSS
   // and chunk files that the browser is currently using.
   distDir: process.env.NODE_ENV === 'development' ? '.next-dev' : '.next',
+  async redirects() {
+    return [
+      {
+        source: '/performance',
+        destination: '/predict',
+        permanent: true,
+      },
+    ];
+  },
   async headers() {
     return [
       {
