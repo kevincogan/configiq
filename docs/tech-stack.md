@@ -5,8 +5,8 @@
 Chosen over a plain React SPA because:
 - File-based routing with no extra library
 - Server components reduce client bundle size
-- Route Handlers provide a backend when persistence is added
-- Vercel deployment is zero-config
+- Route Handlers provide same-origin API proxies to the backend services
+- The production container is deployed with Podman and systemd behind nginx
 
 App Router (not Pages Router) because it is the current standard and avoids
 a future migration.
