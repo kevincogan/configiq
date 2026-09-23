@@ -17,6 +17,7 @@ import { DebugPanel } from '@/components/DebugPanel/DebugPanel';
 import styles from './Sizing.module.css';
 import { fetchModelConfig } from '@/lib/huggingface/fetch-config';
 import { useRecommend } from '@/contexts/RecommendContext';
+import type { RecommendProgressEvent } from '@/lib/api/recommend';
 import { isMoeConfig, type PhaseConfig } from '@/lib/api/recommend';
 import { useCatalog } from '@/lib/hooks/useCatalog';
 import { useSettings } from '@/contexts/SettingsContext';
@@ -244,7 +245,7 @@ export default function Sizing() {
   const [modelStatus, setModelStatus] = React.useState<'idle' | 'supported' | 'catalog' | 'fetching' | 'fetched' | 'error'>('idle');
 
   // GPU sizer (persistent across navigation)
-  const { isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, startSizing } = useRecommend();
+  const { isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, progressHistory, startSizing } = useRecommend();
   const [debugOpen, setDebugOpen] = React.useState(false);
 
   // Additional constraints accordion
@@ -638,7 +639,7 @@ export default function Sizing() {
       {/* ─── Loading ─── */}
       {isLoading && (
         <div className={styles.card}>
-          <GpuChipLoader elapsed={elapsed} timeoutSeconds={gatewayTimeout} />
+          <GpuChipLoader elapsed={elapsed} timeoutSeconds={gatewayTimeout} progressMessages={recommendProgressMessages(progressHistory)} />
         </div>
       )}
 
@@ -960,4 +961,25 @@ export default function Sizing() {
 function StatusChip({ status }: { status: string }) {
   if (status === 'idle') return null;
   return null; // Chip is rendered inside the input wrapper instead
+}
+
+function recommendProgressMessages(progressHistory: RecommendProgressEvent[]): string[] {
+  return progressHistory.flatMap(progress => {
+    switch (progress.type) {
+      case 'search_started':
+        return [`Searching up to ${progress.maxGpus} GPUs`];
+      case 'window_started':
+        return [progress.window.minGpus === progress.window.maxGpus
+          ? `Evaluating ${progress.window.minGpus} GPU`
+          : `Evaluating ${progress.window.minGpus}–${progress.window.maxGpus} GPUs`];
+      case 'window_completed':
+        return [progress.candidateGpus == null
+          ? `${progress.window.minGpus}–${progress.window.maxGpus} GPUs — no qualifying configuration`
+          : `${progress.window.minGpus}–${progress.window.maxGpus} GPUs — provisional candidate at ${progress.candidateGpus} GPUs`];
+      case 'refining':
+        return [`Refining below ${progress.candidateGpus} GPUs: checking ${progress.window.minGpus}–${progress.window.maxGpus}`];
+      case 'completed':
+        return [];
+    }
+  });
 }

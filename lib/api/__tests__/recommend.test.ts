@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { RecommendRequestSchema } from '../schemas'
-import { callRecommend, generateRequestId } from '../recommend'
+import { callRecommend, generateRequestId, incrementalRecommend } from '../recommend'
 import type { RecommendResult, RecommendErrorResponse } from '../recommend'
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -233,6 +233,53 @@ describe('callRecommend', () => {
 
     const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(sentBody).not.toHaveProperty('model_config')
+  })
+
+  it('sends recommendation GPU window bounds upstream', async () => {
+    const mockFetch = mockFetchOk(EXTERNAL_RESPONSE)
+    vi.stubGlobal('fetch', mockFetch)
+
+    await callRecommend(VALID_REQUEST, { window: { minGpus: 2, maxGpus: 4 } })
+
+    const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(sentBody.min_candidate_gpus).toBe(2)
+    expect(sentBody.max_candidate_gpus).toBe(4)
+  })
+
+  it('refines a feasible GPU window before completing', async () => {
+    const noConfiguration = {
+      ok: false,
+      status: 422,
+      json: () => Promise.resolve({ detail: 'No configuration meets the specified requirements.' }),
+    }
+    const feasible = {
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(EXTERNAL_RESPONSE),
+    }
+    const refineEmpty = {
+      ok: false,
+      status: 422,
+      json: () => Promise.resolve({ detail: 'No configuration meets the specified requirements.' }),
+    }
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(noConfiguration)
+      .mockResolvedValueOnce(noConfiguration)
+      .mockResolvedValueOnce(feasible)
+      .mockResolvedValueOnce(refineEmpty))
+
+    const events = []
+    for await (const event of incrementalRecommend(VALID_REQUEST)) events.push(event)
+
+    expect(events.map(event => event.type)).toEqual([
+      'search_started', 'window_started', 'window_completed',
+      'window_started', 'window_completed',
+      'window_started', 'window_completed', 'refining',
+      'window_started', 'window_completed', 'completed',
+    ])
+    expect(events[5]).toMatchObject({ type: 'window_started', window: { minGpus: 3, maxGpus: 4 } })
+    expect(events[7]).toMatchObject({ type: 'refining', window: { minGpus: 3, maxGpus: 3 }, candidateGpus: 4 })
+    expect(events.at(-1)).toMatchObject({ type: 'completed', response: { status: 'completed' } })
   })
 
   it('returns AISIM_NOT_CONFIGURED when API URL is missing', async () => {

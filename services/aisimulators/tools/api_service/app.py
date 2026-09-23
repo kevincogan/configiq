@@ -11,6 +11,7 @@ See docs/api/openapi.yaml for the full spec.
 import argparse
 import json
 import logging
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -69,6 +70,8 @@ class RecommendRequest(BaseModel):
     prefix: int = Field(default=0, description="Prefix cache length.")
     database_mode: str = Field(default="HYBRID", description="Perf database mode.")
     top_n: int = Field(default=5, ge=1, le=20, examples=[2], description="Number of configs to return.")
+    min_candidate_gpus: int | None = Field(default=None, gt=0, description="Lower bound for the recommendation GPU window.")
+    max_candidate_gpus: int | None = Field(default=None, gt=0, description="Upper bound for the recommendation GPU window.")
     inclusive_tpot: bool = Field(
         default=False,
         description="Report TPOT as (ttft + tpot * (osl - 1)) / osl, spreading TTFT across all output tokens. "
@@ -90,6 +93,12 @@ class RecommendRequest(BaseModel):
         has_conc = self.target_concurrency is not None
         if has_rate == has_conc:
             raise ValueError("Exactly one of target_request_rate or target_concurrency must be provided.")
+        if (
+            self.min_candidate_gpus is not None
+            and self.max_candidate_gpus is not None
+            and self.min_candidate_gpus > self.max_candidate_gpus
+        ):
+            raise ValueError("min_candidate_gpus cannot exceed max_candidate_gpus.")
         return self
 
 
@@ -336,6 +345,7 @@ _SM_ARCHITECTURE = {
 }
 
 _DEFAULT_GPU_MEMORY_UTILIZATION = 0.9
+_DEFAULT_MAX_CANDIDATE_GPUS = 1024
 
 
 class _noop_context:
@@ -412,20 +422,63 @@ def _aisimulate_runner_factory():
     return resolve_runner_factory("engine")
 
 
-def _aisimulate_recommendation_config(req: RecommendRequest, *, model_path: str | None = None) -> Any:
+def _max_candidate_gpus() -> int:
+    raw = os.environ.get("AISIMULATORS_MAX_CANDIDATE_GPUS")
+    if raw is None:
+        return _DEFAULT_MAX_CANDIDATE_GPUS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_MAX_CANDIDATE_GPUS
+    return value if value > 0 else _DEFAULT_MAX_CANDIDATE_GPUS
+
+
+def _aisimulate_recommendation_config(
+    req: RecommendRequest,
+    *,
+    model_path: str | None = None,
+    max_candidate_gpus: int | None = None,
+) -> Any:
     from aisimulate.config.cli import CoreRecommendationConfig
 
     context_length = req.max_seq_len or req.isl + req.osl
+    server_max_gpus = max_candidate_gpus or _max_candidate_gpus()
+    window_max_gpus = min(req.max_candidate_gpus, server_max_gpus) if req.max_candidate_gpus else server_max_gpus
+    if req.min_candidate_gpus is not None and req.min_candidate_gpus > window_max_gpus:
+        raise ValueError("min_candidate_gpus cannot exceed the effective max_candidate_gpus.")
+    # A one-GPU total window cannot contain a disaggregated deployment: it
+    # requires at least one prefill and one decode GPU. Narrow windows also
+    # need a small trial budget so incremental search does not spend the full
+    # per-window timeout on redundant optimizer trials.
+    modes = ["aggregated"] if window_max_gpus == 1 else ["aggregated", "disaggregated"]
+    max_trials = 1 if window_max_gpus == 1 else 4 if req.max_candidate_gpus is not None else 8
+    parallelism = 1 if window_max_gpus == 1 else 2 if req.max_candidate_gpus is not None else 4
+    candidate_timeout_seconds = 15 if req.max_candidate_gpus is not None else 30
+    concurrency = int(req.target_concurrency or 1)
     load = (
         {"type": "constant_rate", "requests_per_second": req.target_request_rate}
         if req.target_request_rate is not None
         else {"type": "concurrency", "concurrency": int(req.target_concurrency or 1)}
     )
+    workers: dict[str, Any] = {
+        "aggregated": {"parallelism": {"preset": "default"}},
+    }
+    if "disaggregated" in modes:
+        workers.update({
+            "prefill": {
+                "parallelism": {"preset": "default"},
+                **({"context_length": req.prefill_max_seq_len} if req.prefill_max_seq_len else {}),
+            },
+            "decode": {
+                "parallelism": {"preset": "default"},
+                **({"context_length": req.decode_max_seq_len} if req.decode_max_seq_len else {}),
+            },
+        })
     raw: dict[str, Any] = {
         "traffic": {
             "source": {"type": "synthetic", "input_tokens": req.isl, "output_tokens": req.osl},
             "load": load,
-            "stop": {"requests": max(32, int(req.target_concurrency or 1) * 4)},
+            "stop": {"requests": max(4, min(32, concurrency * 4))},
         },
         "engine": {
             "model": model_path or req.model_path,
@@ -434,18 +487,8 @@ def _aisimulate_recommendation_config(req: RecommendRequest, *, model_path: str 
             "backend_version": req.backend_version,
             "database_mode": req.database_mode,
             "context_length": context_length,
-            "mode": {"choices": ["aggregated", "disaggregated"]},
-            "workers": {
-                "aggregated": {"parallelism": {"preset": "default"}},
-                "prefill": {
-                    "parallelism": {"preset": "default"},
-                    **({"context_length": req.prefill_max_seq_len} if req.prefill_max_seq_len else {}),
-                },
-                "decode": {
-                    "parallelism": {"preset": "default"},
-                    **({"context_length": req.decode_max_seq_len} if req.decode_max_seq_len else {}),
-                },
-            },
+            "mode": {"choices": modes},
+            "workers": workers,
         },
         "evaluation": {
             "sla": (
@@ -457,15 +500,16 @@ def _aisimulate_recommendation_config(req: RecommendRequest, *, model_path: str 
         "optimization": {
             "target": "min_gpus",
             "constraints": {
-                "max_candidate_gpus": 1024,
+                "min_candidate_gpus": req.min_candidate_gpus,
+                "max_candidate_gpus": window_max_gpus,
                 **({"min_goodput_rps": req.target_request_rate} if req.target_request_rate is not None else {}),
             },
         },
         "optimizer": {
             "algorithm": "random",
-            "max_trials": max(8, min(32, req.top_n * 2)),
-            "parallelism": 4,
-            "candidate_timeout_seconds": 30,
+            "max_trials": max_trials,
+            "parallelism": parallelism,
+            "candidate_timeout_seconds": candidate_timeout_seconds,
         },
     }
     return CoreRecommendationConfig.model_validate(raw)
@@ -606,7 +650,6 @@ def _run_aisimulate_recommendation(req: RecommendRequest):
             runner_factory=_aisimulate_runner_factory(),
             show_progress=False,
         )
-
 
 def _run_aisimulate_prediction(req: EstimateRequest, include: set[str]):
     from aisimulate.predict import run_prediction

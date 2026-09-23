@@ -94,6 +94,18 @@ export interface RecommendErrorResponse {
 
 export type RecommendResponse = RecommendResult | RecommendErrorResponse
 
+export interface RecommendWindow {
+  minGpus: number
+  maxGpus: number
+}
+
+export type RecommendProgressEvent =
+  | { type: 'search_started'; maxGpus: number }
+  | { type: 'window_started'; window: RecommendWindow }
+  | { type: 'window_completed'; window: RecommendWindow; candidateGpus: number | null }
+  | { type: 'refining'; window: RecommendWindow; candidateGpus: number }
+  | { type: 'completed'; response: RecommendResponse }
+
 // ─── Request ID ──────────────────────────────────────────────────────────────
 
 export function generateRequestId(): string {
@@ -162,13 +174,15 @@ function parsePhase(raw: RawWorkerConfig | null | undefined): PhaseConfig | null
 // ─── Service ─────────────────────────────────────────────────────────────────
 
 export async function callRecommend(
-  request: RecommendRequest
+  request: RecommendRequest,
+  options: { window?: RecommendWindow; timeoutSeconds?: number; signal?: AbortSignal } = {},
 ): Promise<RecommendResponse> {
   const requestId = generateRequestId()
   const startTime = performance.now()
 
   const baseUrl = process.env.AISIMULATORS_GATEWAY_URL
   const timeoutSeconds = gatewayTimeoutSeconds()
+  const requestTimeoutSeconds = options.timeoutSeconds ?? timeoutSeconds
 
   if (!baseUrl) {
     return makeError(requestId, 'AISIM_NOT_CONFIGURED', 'AISimulators API URL is not configured')
@@ -196,9 +210,15 @@ export async function callRecommend(
   if (request.request_latency != null) externalPayload.request_latency = request.request_latency
   if (request.prefix != null) externalPayload.prefix = request.prefix
   if (request.model_config != null) externalPayload.model_config = request.model_config
+  if (options.window?.minGpus != null) externalPayload.min_candidate_gpus = options.window.minGpus
+  if (options.window?.maxGpus != null) externalPayload.max_candidate_gpus = options.window.maxGpus
 
   let response: Response
   try {
+    const timeoutSignal = AbortSignal.timeout(requestTimeoutSeconds * 1000)
+    const signal = options.signal
+      ? AbortSignal.any([timeoutSignal, options.signal])
+      : timeoutSignal
     response = await fetch(`${baseUrl}/recommend`, {
       method: 'POST',
       headers: {
@@ -206,12 +226,13 @@ export async function callRecommend(
         'Accept': 'application/json',
       },
       body: JSON.stringify(externalPayload),
-      signal: AbortSignal.timeout(timeoutSeconds * 1000),
+      signal,
     })
   } catch (err: unknown) {
+    if (options.signal?.aborted) throw err
     const durationMs = Math.round(performance.now() - startTime)
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-      return makeError(requestId, 'AISIM_TIMEOUT', `The AISimulators API did not respond within ${timeoutSeconds} seconds (waited ${durationMs}ms)`)
+      return makeError(requestId, 'AISIM_TIMEOUT', `The AISimulators API did not respond within ${requestTimeoutSeconds} seconds (waited ${durationMs}ms)`)
     }
     return makeError(requestId, 'AISIM_UNAVAILABLE', 'AISimulators API is unreachable')
   }
@@ -330,6 +351,89 @@ export async function callRecommend(
     },
     warnings,
   }
+}
+
+/**
+ * Search progressively larger GPU windows, then refine the first feasible
+ * window. A feasible result from a range is provisional until its lower
+ * sub-range has been checked.
+ */
+export async function* incrementalRecommend(
+  request: RecommendRequest,
+  signal?: AbortSignal,
+): AsyncGenerator<RecommendProgressEvent> {
+  const maxGpus = configuredMaxCandidateGpus()
+  const totalTimeoutSeconds = gatewayTimeoutSeconds()
+  const deadline = performance.now() + Math.max(1, totalTimeoutSeconds - 1) * 1000
+  let windowMin = 1
+  let windowMax = 1
+  let best: RecommendResult | null = null
+
+  yield { type: 'search_started', maxGpus }
+
+  while (windowMin <= maxGpus) {
+    if (signal?.aborted) throw new DOMException('Recommendation search aborted', 'AbortError')
+    const window = { minGpus: windowMin, maxGpus: windowMax }
+    yield { type: 'window_started', window }
+    const remainingSeconds = Math.ceil((deadline - performance.now()) / 1000)
+    if (remainingSeconds <= 0) {
+      yield {
+        type: 'completed',
+        response: best ?? makeError(generateRequestId(), 'AISIM_TIMEOUT', 'The incremental recommendation search exceeded its overall time budget.'),
+      }
+      return
+    }
+    const response = await callRecommend(request, {
+      window,
+      timeoutSeconds: remainingSeconds,
+      signal,
+    })
+
+    if (response.status === 'failed') {
+      if (response.error.code !== 'AISIM_NO_CONFIGURATION') {
+        yield { type: 'completed', response: best ?? response }
+        return
+      }
+
+      yield { type: 'window_completed', window, candidateGpus: null }
+      if (best != null) {
+        yield { type: 'completed', response: best }
+        return
+      }
+      windowMin = windowMax + 1
+      windowMax = Math.min(maxGpus, Math.max(windowMin, windowMax * 2))
+      continue
+    }
+
+    const candidateGpus = response.recommendation.gpusNeeded
+    if (best == null || candidateGpus < best.recommendation.gpusNeeded) best = response
+    yield { type: 'window_completed', window, candidateGpus }
+
+    if (candidateGpus <= windowMin) {
+      yield { type: 'completed', response: best }
+      return
+    }
+
+    const refinementMax = candidateGpus - 1
+    if (refinementMax >= windowMin) {
+      yield { type: 'refining', window: { minGpus: windowMin, maxGpus: refinementMax }, candidateGpus }
+      windowMax = refinementMax
+      continue
+    }
+
+    yield { type: 'completed', response: best }
+    return
+  }
+
+  yield {
+    type: 'completed',
+    response: makeError(generateRequestId(), 'AISIM_NO_CONFIGURATION', 'No valid GPU configuration found for this workload.'),
+  }
+}
+
+function configuredMaxCandidateGpus(): number {
+  const value = Number(process.env.AISIMULATORS_MAX_CANDIDATE_GPUS)
+  return Number.isInteger(value) && value > 0 ? value : 1024
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

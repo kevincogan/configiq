@@ -134,6 +134,54 @@ class MockPredictionResult:
 
 class TestRecommend:
 
+    def test_recommendation_search_is_bounded(self):
+        request = app_module.RecommendRequest.model_validate(VALID_RECOMMEND_BODY)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.optimization.constraints.max_candidate_gpus == 1024
+        assert config.optimizer.max_trials == 8
+
+    def test_recommendation_search_budget_is_configurable(self, monkeypatch):
+        monkeypatch.setenv("AISIMULATORS_MAX_CANDIDATE_GPUS", "4096")
+        request = app_module.RecommendRequest.model_validate(VALID_RECOMMEND_BODY)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.optimization.constraints.max_candidate_gpus == 4096
+
+    def test_requested_gpu_window_is_clamped_to_server_budget(self, monkeypatch):
+        monkeypatch.setenv("AISIMULATORS_MAX_CANDIDATE_GPUS", "8")
+        body = {**VALID_RECOMMEND_BODY, "max_candidate_gpus": 64}
+        request = app_module.RecommendRequest.model_validate(body)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.optimization.constraints.max_candidate_gpus == 8
+
+    def test_rejects_window_lower_bound_above_effective_server_budget(self, monkeypatch):
+        monkeypatch.setenv("AISIMULATORS_MAX_CANDIDATE_GPUS", "8")
+        body = {**VALID_RECOMMEND_BODY, "min_candidate_gpus": 9, "max_candidate_gpus": 64}
+        request = app_module.RecommendRequest.model_validate(body)
+
+        with pytest.raises(ValueError, match="effective max_candidate_gpus"):
+            app_module._aisimulate_recommendation_config(request)
+
+    def test_recommendation_window_bounds_are_forwarded(self):
+        body = {**VALID_RECOMMEND_BODY, "min_candidate_gpus": 2, "max_candidate_gpus": 4}
+        request = app_module.RecommendRequest.model_validate(body)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.optimization.constraints.min_candidate_gpus == 2
+        assert config.optimization.constraints.max_candidate_gpus == 4
+
+    def test_one_gpu_window_avoids_disaggregated_trials(self):
+        body = {**VALID_RECOMMEND_BODY, "target_concurrency": 1, "min_candidate_gpus": 1, "max_candidate_gpus": 1}
+        request = app_module.RecommendRequest.model_validate(body)
+        config = app_module._aisimulate_recommendation_config(request)
+
+        assert config.engine.mode.choices == ["aggregated"]
+        assert config.optimizer.max_trials == 1
+        assert config.optimizer.parallelism == 1
+        assert config.optimizer.candidate_timeout_seconds == 15
+
     @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_success(self, mock_recommend):
         mock_recommend.return_value = make_mock_recommendation_result()
