@@ -21,7 +21,7 @@ dependencies = [
     # exact download URL (not name==version) on purpose: a direct URL forces pip
     # to install this exact artifact. Bump the URL (version + build hash live in
     # the tag) for a new SDK; see docs/RELEASE_PROCESS.md.
-    "aisimulate @ https://github.com/redhat-performance/aisimulate/releases/download/deploy-api-v0.12.0%2B9de2b79e/aisimulate-0.12.0-cp311-abi3-manylinux_2_28_x86_64.whl",
+    "aisimulate @ https://github.com/redhat-performance/aisimulate/releases/download/deploy-api-v0.13.0%2B7f1efbc1/aisimulate-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl",
     "plotext>=5.3.2,<6",
 ]
 
