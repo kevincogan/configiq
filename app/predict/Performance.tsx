@@ -942,7 +942,6 @@ export default function Performance() {
       summary: [
         { k: 'ISL', v: `${testISL}` },
         { k: 'OSL', v: `${testOSL}` },
-        { k: 'context', v: maxSeqLen != null ? `${maxSeqLen}` : 'auto' },
         { k: 'users', v: `${testConcurrentUsers}` },
         { k: 'prefix', v: `${testPrefix}` },
       ],
@@ -964,33 +963,6 @@ export default function Performance() {
           onChange: (val: string) => handleOslChange(val)
         },
         {
-          label: 'Max sequence length',
-          value: maxSeqLenInput,
-          term: 'maxModelLen',
-          type: 'number' as const,
-          placeholder: 'ISL + OSL',
-          invalid: invalidMaxSeqLen,
-          onChange: (val: string) => handleSequenceLengthChange(val, setMaxSeqLenInput, setMaxSeqLen),
-        },
-        {
-          label: 'Prefill max sequence length',
-          value: prefillMaxSeqLenInput,
-          term: 'prefillMaxSeqLen',
-          type: 'number' as const,
-          placeholder: 'Optional override',
-          invalid: invalidPrefillMaxSeqLen,
-          onChange: (val: string) => handleSequenceLengthChange(val, setPrefillMaxSeqLenInput, setPrefillMaxSeqLen),
-        },
-        {
-          label: 'Decode max sequence length',
-          value: decodeMaxSeqLenInput,
-          term: 'decodeMaxSeqLen',
-          type: 'number' as const,
-          placeholder: 'Optional override',
-          invalid: invalidDecodeMaxSeqLen,
-          onChange: (val: string) => handleSequenceLengthChange(val, setDecodeMaxSeqLenInput, setDecodeMaxSeqLen),
-        },
-        {
           label: 'Concurrent users',
           value: concurrentUsersInput,
           term: 'concurrent',
@@ -1005,6 +977,43 @@ export default function Performance() {
           type: 'number' as const,
           invalid: false,
           onChange: (val: string) => handlePrefixChange(val)
+        },
+      ],
+    },
+    {
+      id: 'context-window', title: 'Context window sizing',
+      summary: [
+        { k: 'max_seq_len', v: maxSeqLen != null ? `${maxSeqLen}` : 'auto' },
+        { k: 'prefill_max_seq_len', v: prefillMaxSeqLen != null ? `${prefillMaxSeqLen}` : 'auto' },
+        { k: 'decode_max_seq_len', v: decodeMaxSeqLen != null ? `${decodeMaxSeqLen}` : 'auto' },
+      ],
+      fields: [
+        {
+          label: 'Max sequence length (tokens)',
+          value: maxSeqLenInput,
+          term: 'maxModelLen',
+          type: 'number' as const,
+          placeholder: 'ISL + OSL',
+          invalid: invalidMaxSeqLen,
+          onChange: (val: string) => handleSequenceLengthChange(val, setMaxSeqLenInput, setMaxSeqLen),
+        },
+        {
+          label: 'Prefill length (tokens)',
+          value: prefillMaxSeqLenInput,
+          term: 'prefillMaxSeqLen',
+          type: 'number' as const,
+          placeholder: 'Optional override',
+          invalid: invalidPrefillMaxSeqLen,
+          onChange: (val: string) => handleSequenceLengthChange(val, setPrefillMaxSeqLenInput, setPrefillMaxSeqLen),
+        },
+        {
+          label: 'Decode length (tokens)',
+          value: decodeMaxSeqLenInput,
+          term: 'decodeMaxSeqLen',
+          type: 'number' as const,
+          placeholder: 'Optional override',
+          invalid: invalidDecodeMaxSeqLen,
+          onChange: (val: string) => handleSequenceLengthChange(val, setDecodeMaxSeqLenInput, setDecodeMaxSeqLen),
         },
       ],
     },
@@ -1292,7 +1301,7 @@ export default function Performance() {
             variant="primary"
             size="lg"
             onClick={() => { setTestResult(null); setTestError(null); setTestErrorCode(null); setCalcTrigger(t => t + 1); }}
-            isDisabled={isCalculating || !gpu || !model || catalogLoading || invalidISL || invalidOSL || invalidUsers || invalidTpSize || invalidPpSize}
+            isDisabled={isCalculating || !gpu || !model || catalogLoading || invalidISL || invalidOSL || invalidUsers || invalidTpSize || invalidPpSize || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen}
           >
             {isCalculating ? 'Calculating...' : 'Calculate'}
           </Button>
