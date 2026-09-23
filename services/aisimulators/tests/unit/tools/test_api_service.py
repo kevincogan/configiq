@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from configiq.systems import load_device_names_from_perf_data, supported_systems
@@ -113,6 +113,35 @@ class MockCandidate:
 @dataclass
 class MockRecommendationResult:
     selected_candidates: list[MockCandidate] = field(default_factory=lambda: [MockCandidate()])
+    chosen_exp: str = "agg"
+    best_configs: dict = field(init=False)
+
+    def __post_init__(self):
+        rows = []
+        for candidate in self.selected_candidates:
+            prediction = candidate.prediction_config["engine"]
+            worker = prediction["workers"]["aggregated"]
+            parallel = worker["parallelism"]
+            metrics = candidate.metrics
+            row = {
+                "total_gpus_needed": candidate.used_gpus,
+                "replicas_needed": parallel.get("replicas", 1),
+                "num_total_gpus": candidate.used_gpus,
+                "tp": parallel.get("tensor"),
+                "pp": parallel.get("pipeline"),
+                "dp": parallel.get("attention_data"),
+                "bs": worker.get("scheduler", {}).get("max_sequences"),
+                "ttft": metrics.get("ttft_ms"),
+                "tpot": metrics.get("tpot_ms"),
+                "tokens_per_second": metrics.get("output_throughput_tok_s"),
+                "tokens_per_second_per_gpu": metrics.get("output_throughput_tok_s_per_gpu"),
+                "model": prediction.get("model"),
+                "system": prediction.get("hardware"),
+                "backend": prediction.get("backend"),
+                "backend_version": prediction.get("backend_version"),
+            }
+            rows.append(row)
+        self.best_configs = {self.chosen_exp: app_module.pd.DataFrame(rows)}
 
 
 def make_mock_recommendation_result(candidates=None):
@@ -1001,14 +1030,19 @@ class TestEstimate:
 
 class TestModelConfigPassthrough:
 
-    @patch("aisimulate.recommend.run_recommendation")
-    @patch("tools.api_service.app._aisimulate_runner_factory")
-    def test_recommend_model_config_is_forwarded(self, mock_factory, mock_run):
-        def check(config, **_kwargs):
-            assert Path(config.engine.model, "config.json").is_file()
-            return make_mock_recommendation_result()
+    @patch("tools.api_service.app.Task")
+    def test_recommend_model_config_is_forwarded(self, mock_task):
+        def make_task(**kwargs):
+            model_path = kwargs.get("model_path") or kwargs.get("prefill_model_path")
+            assert Path(model_path, "config.json").is_file()
+            task = MagicMock()
+            task.run.return_value = app_module.pd.DataFrame()
+            task.serving_mode = kwargs["serving_mode"]
+            task.tpot = kwargs["tpot"]
+            task.request_latency = kwargs["request_latency"]
+            return task
 
-        mock_run.side_effect = check
+        mock_task.side_effect = make_task
         body = {**VALID_RECOMMEND_BODY, "model_config": {"hidden_size": 8192, "architectures": ["LlamaForCausalLM"]}}
         request = app_module.RecommendRequest.model_validate(body)
         app_module._run_aisimulate_recommendation(request)
@@ -1020,14 +1054,18 @@ class TestModelConfigPassthrough:
         resp = client.post("/memory", json=body)
         assert resp.status_code == 200
 
-    @patch("aisimulate.recommend.run_recommendation")
-    @patch("tools.api_service.app._aisimulate_runner_factory")
-    def test_empty_model_config_is_ignored(self, mock_factory, mock_run):
-        def check(config, **_kwargs):
-            assert config.engine.model == "Qwen/Qwen3-32B"
-            return make_mock_recommendation_result()
+    @patch("tools.api_service.app.Task")
+    def test_empty_model_config_is_ignored(self, mock_task):
+        def make_task(**kwargs):
+            assert kwargs.get("model_path", kwargs.get("prefill_model_path")) == "Qwen/Qwen3-32B"
+            task = MagicMock()
+            task.run.return_value = app_module.pd.DataFrame()
+            task.serving_mode = kwargs["serving_mode"]
+            task.tpot = kwargs["tpot"]
+            task.request_latency = kwargs["request_latency"]
+            return task
 
-        mock_run.side_effect = check
+        mock_task.side_effect = make_task
         body = {**VALID_RECOMMEND_BODY, "model_config": {}}
         request = app_module.RecommendRequest.model_validate(body)
         app_module._run_aisimulate_recommendation(request)
@@ -1035,7 +1073,7 @@ class TestModelConfigPassthrough:
     def test_invalid_model_config_reaches_aisimulate(self):
         body = {**VALID_RECOMMEND_BODY, "model_config": {"additionalProp1": {}}}
         request = app_module.RecommendRequest.model_validate(body)
-        with patch("aisimulate.recommend.run_recommendation", side_effect=ValueError("invalid model config")), pytest.raises(
+        with patch("tools.api_service.app.Task", side_effect=ValueError("invalid model config")), pytest.raises(
             ValueError, match="invalid model config"
         ):
             app_module._run_aisimulate_recommendation(request)
