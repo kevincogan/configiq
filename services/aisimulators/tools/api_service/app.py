@@ -460,6 +460,20 @@ def _aisimulate_recommendation_config(
         if req.target_request_rate is not None
         else {"type": "concurrency", "concurrency": int(req.target_concurrency or 1)}
     )
+    workers: dict[str, Any] = {
+        "aggregated": {"parallelism": {"preset": "default"}},
+    }
+    if "disaggregated" in modes:
+        workers.update({
+            "prefill": {
+                "parallelism": {"preset": "default"},
+                **({"context_length": req.prefill_max_seq_len} if req.prefill_max_seq_len else {}),
+            },
+            "decode": {
+                "parallelism": {"preset": "default"},
+                **({"context_length": req.decode_max_seq_len} if req.decode_max_seq_len else {}),
+            },
+        })
     raw: dict[str, Any] = {
         "traffic": {
             "source": {"type": "synthetic", "input_tokens": req.isl, "output_tokens": req.osl},
@@ -474,17 +488,7 @@ def _aisimulate_recommendation_config(
             "database_mode": req.database_mode,
             "context_length": context_length,
             "mode": {"choices": modes},
-            "workers": {
-                "aggregated": {"parallelism": {"preset": "default"}},
-                "prefill": {
-                    "parallelism": {"preset": "default"},
-                    **({"context_length": req.prefill_max_seq_len} if req.prefill_max_seq_len else {}),
-                },
-                "decode": {
-                    "parallelism": {"preset": "default"},
-                    **({"context_length": req.decode_max_seq_len} if req.decode_max_seq_len else {}),
-                },
-            },
+            "workers": workers,
         },
         "evaluation": {
             "sla": (
