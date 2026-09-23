@@ -100,6 +100,9 @@ class EstimateRequest(BaseModel):
     backend_version: str | None = Field(default=None, examples=[None], description="Backend version.")
     isl: int = Field(default=4000, description="Input sequence length.")
     osl: int = Field(default=1000, description="Output sequence length.")
+    max_seq_len: int | None = Field(default=None, gt=0, description="Maximum sequence length for KV cache allocation.")
+    prefill_max_seq_len: int | None = Field(default=None, gt=0, description="Prefill worker sequence-length override.")
+    decode_max_seq_len: int | None = Field(default=None, gt=0, description="Decode worker sequence-length override.")
     tp_size: int = Field(default=1, description="Tensor parallel size.")
     pp_size: int = Field(default=1, description="Pipeline parallel size.")
     batch_size: int = Field(default=128, description="Batch size (max concurrent requests).")
@@ -550,7 +553,6 @@ def _aisimulate_candidate_config(candidate: Any, req: RecommendRequest) -> Recom
         tokens_per_second_per_gpu=_metric(metrics, "output_throughput_tok_s_per_gpu"),
         model=engine.get("model", req.model_path), system=engine.get("hardware", req.system),
         backend=engine.get("backend", req.backend), backend_version=engine.get("backend_version", req.backend_version),
-        mode=mode,
     )
     if mode == "disagg":
         config.prefill_config = _aisimulate_worker_config(prediction, "prefill", req)
@@ -845,7 +847,7 @@ def post_recommend(
     for cfg in configs:
         if req.inclusive_tpot:
             cfg.tpot = _inclusive_tpot(cfg.ttft, cfg.tpot, req.osl)
-        if cfg.mode == "disagg":
+        if cfg.prefill_config is not None or cfg.decode_config is not None:
             for worker, context_length in (
                 (cfg.prefill_config, req.prefill_max_seq_len or req.max_seq_len),
                 (cfg.decode_config, req.decode_max_seq_len or req.max_seq_len),
@@ -869,7 +871,8 @@ def post_recommend(
                     cfg.tp or req.tp_size, cfg.pp or req.pp_size, req.isl, req.osl,
                     cfg.bs or req.target_concurrency or 1, max_seq_len=req.max_seq_len,
                 )
-    return RecommendResponse(configs=configs, chosen_mode=configs[0].mode)
+    chosen_mode = "disagg" if configs[0].prefill_config is not None else "agg"
+    return RecommendResponse(configs=configs, chosen_mode=chosen_mode)
 
 
 @app.post("/estimate")
