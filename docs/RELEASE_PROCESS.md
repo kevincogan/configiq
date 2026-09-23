@@ -75,8 +75,8 @@ Published containers:
 The `aisimulators` and `aicostings` services install the **aisimulate** SDK as a
 single unified wheel from the Red Hat `redhat-performance/aisimulate` fork's
 GitHub Release assets — not PyPI. The one wheel bundles the Rust-compiled core
-and provides the `aiconfigurator` / `aiconfigurator_core` compatibility
-namespaces the services still import (`aisimulators` directly for sizing;
+and provides the `aisimulate` / `aisimulate_core` namespaces the services import
+(`aisimulators` directly for sizing;
 `aicostings` indirectly via `configiq.systems` for the GPU catalog). It is
 referenced by **exact download URL** rather than `name==version`, because the
 wheel is published only via the fork's Release (never PyPI); a direct URL forces

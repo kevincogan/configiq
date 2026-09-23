@@ -22,12 +22,12 @@ dependencies = [
     # configiq.systems) so aicostings and the aisimulators service never drift;
     # pyarrow reads the SDK's bundled perf-data parquet for the display names. The
     # single aisimulate wheel bundles the Rust-compiled core and the
-    # aiconfigurator_core compatibility namespace configiq.systems imports. It is
-    # consumed as a wheel from the Red Hat fork's GitHub Release (not PyPI, not
+    # aisimulate_core namespace configiq.systems imports. It is consumed as a
+    # wheel from the Red Hat fork's GitHub Release (not PyPI, not
     # vendored), referenced by exact download URL so pip installs that exact
     # artifact. Keep this URL identical to the aisimulators service and bump both
     # together; see docs/RELEASE_PROCESS.md.
-    "aisimulate @ https://github.com/redhat-performance/aisimulate/releases/download/deploy-api-v0.12.0%2B9de2b79e/aisimulate-0.12.0-cp311-abi3-manylinux_2_28_x86_64.whl",
+    "aisimulate @ https://github.com/redhat-performance/aisimulate/releases/download/deploy-api-v0.13.0%2B7f1efbc1/aisimulate-0.13.0-cp311-abi3-manylinux_2_28_x86_64.whl",
     "pyarrow",
 ]
 

@@ -5,7 +5,7 @@
 This is the single source of truth for "what GPU systems exist" and "what do we
 call them" across services, so aisimulators and aicostings never drift.
 
-The aisimulate SDK (`aiconfigurator_core`) is imported lazily inside the
+The aisimulate SDK (`aisimulate_core`) is imported lazily inside the
 functions rather than at module load: it ships a compiled, platform-specific
 wheel, and not every consumer needs it at import time. Callers that use these
 functions must declare the SDK as their own dependency. Everything here degrades
@@ -26,7 +26,7 @@ def supported_systems() -> set[str]:
     Returns an empty set if the SDK is not importable.
     """
     try:
-        from aiconfigurator_core.sdk.common import SupportedSystems
+        from aisimulate_core.sdk.common import SupportedSystems
     except ImportError:
         logger.warning("aisimulate SDK not available; no supported systems")
         return set()
@@ -45,7 +45,7 @@ def load_device_names_from_perf_data() -> dict[str, str]:
     the returned map is empty and callers should fall back to the system id.
     """
     try:
-        from aiconfigurator_core.sdk.perf_database import get_systems_paths
+        from aisimulate_core.sdk.perf_database import get_systems_paths
     except ImportError:
         logger.warning("aisimulate SDK not available; device display names unavailable")
         return {}
