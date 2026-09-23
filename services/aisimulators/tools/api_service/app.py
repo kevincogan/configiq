@@ -679,13 +679,14 @@ def _build_serving_config(
     concurrency: int,
     gemm: str | None,
     prefix: int = 0,
+    max_seq_len: int | None = None,
 ) -> ServingConfig:
     quant_map = {"fp8": "fp8", "fp8_block": "fp8", "int8": "int8"}
     quantization = quant_map.get(gemm or "", "auto")
     return ServingConfig(
         backend=backend,
         tensor_parallel_size=tp,
-        max_model_len=isl + osl,
+        max_model_len=max_seq_len or isl + osl,
         max_num_seqs=min(concurrency, 256),
         gpu_memory_utilization=_DEFAULT_GPU_MEMORY_UTILIZATION,
         enable_chunked_prefill=isl >= 4096 or concurrency >= 64,
@@ -708,6 +709,7 @@ def _build_memory_breakdown(
     kvcache_quant: str | None = None,
     moe_tp: int | None = None,
     moe_ep: int | None = None,
+    max_seq_len: int | None = None,
 ) -> MemoryBreakdown | None:
     try:
         raw = estimate_kv_cache(
@@ -715,7 +717,7 @@ def _build_memory_breakdown(
             system=system,
             backend=backend,
             backend_version=backend_version,
-            max_num_tokens=isl + osl,
+            max_num_tokens=max_seq_len or isl + osl,
             max_batch_size=concurrency,
             memory_fraction_kind="of_total",
             memory_fraction_value=_DEFAULT_GPU_MEMORY_UTILIZATION,
