@@ -27,11 +27,16 @@ describe('hybrid model catalogue labels', () => {
     expect(modelParameterBillions('meta-llama/Llama-4-Scout-17B-16E-Instruct')).toBe(108.6)
   })
 
-  it('uses the actual parameter size for DeepSeek R1 distill checkpoints', () => {
+  it('uses the actual parameter size for DeepSeek-derived checkpoints', () => {
     expect(modelSizeLabel('deepseek-ai/DeepSeek-R1-Distill-Qwen-32B')).toBe('32B parameters')
     expect(modelTierLabel('deepseek-ai/DeepSeek-R1-Distill-Qwen-32B')).toBe('Medium model')
     expect(modelSizeLabel('deepseek-ai/DeepSeek-R1-Distill-Llama-8B')).toBe('8B parameters')
+    expect(modelSizeLabel('deepseek-ai/DeepSeek-R1-0528-Qwen3-8B')).toBe('8B parameters')
+    expect(modelTierLabel('deepseek-ai/DeepSeek-R1-0528-Qwen3-8B')).toBe('Small model')
+    expect(modelSizeLabel('deepseek-ai/DeepSeek-R1-0528-Distill-Qwen3-8B')).toBe('8B parameters')
+    expect(modelSizeLabel('deepseek-ai/DeepSeek-V3.1-Distill-Qwen-32B')).toBe('32B parameters')
     expect(modelSizeLabel('deepseek-ai/DeepSeek-R1-0528')).toBe('684.5B parameters')
+    expect(modelSizeLabel('deepseek-ai/DeepSeek-V3.1')).toBe('685.4B parameters')
   })
 
   it('classifies representative small, medium and large models', () => {
