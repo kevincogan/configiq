@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { gatewayTimeoutSeconds } from '@/lib/api/timeout'
 
 const DEPRECATION_HEADERS = {
-  Deprecation: '@1790726400',
+  Deprecation: '@1790208000',
   Sunset: 'Wed, 30 Sep 2026 00:00:00 GMT',
   Link: '</api/predict>; rel="successor-version"',
 }
