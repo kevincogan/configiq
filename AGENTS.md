@@ -12,8 +12,8 @@ REST API (server URL set via `AISIMULATORS_GATEWAY_URL`, e.g.
 
 ## Tech stack
 
-- **Framework**: Next.js 14 App Router + TypeScript
-- **UI**: PatternFly v5 (Red Hat's design system) — no Tailwind, no shadcn
+- **Framework**: Next.js 15 App Router + TypeScript
+- **UI**: PatternFly v6 (Red Hat's design system) — no Tailwind, no shadcn
 - **Charts**: PatternFly Victory Charts
 - **Fonts**: Red Hat Display (headings, metrics), Red Hat Text (body), Red Hat Mono (numbers, code, labels)
 - **Deployment**: Podman containers managed by systemd, behind nginx on IBM Cloud
