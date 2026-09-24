@@ -222,7 +222,6 @@ export default function Performance() {
   const [vllmManualChunkedPrefill, setVllmManualChunkedPrefill] = React.useState<boolean | null>(null);
   const [servingPolicyOverride, setServingPolicyOverride] = React.useState(false);
   const [servingManualContextLimit, setServingManualContextLimit] = React.useState<number | null>(null);
-  const [servingManualPrefixCaching, setServingManualPrefixCaching] = React.useState<boolean | null>(null);
   const [memoryOverride, setMemoryOverride] = React.useState(false);
   const [gpuMemoryUtilization, setGpuMemoryUtilization] = React.useState<number | null>(null);
 
@@ -246,6 +245,9 @@ export default function Performance() {
   const [decodeMaxSeqLen, setDecodeMaxSeqLen] = React.useState<number | null>(null);
   const [testPrefix, setTestPrefix] = React.useState(0);
   const [testTpSize, setTestTpSize] = React.useState(1);
+  const effectiveContextLimit = servingPolicyOverride && servingManualContextLimit !== null
+    ? servingManualContextLimit
+    : maxSeqLen;
   const [calcTrigger, setCalcTrigger] = React.useState(0);
   const [elapsed, setElapsed] = React.useState(0);
   const [testWeightPrecision, setTestWeightPrecision] = React.useState<'FP16' | 'FP8' | 'INT8' | 'INT4' | 'MXFP4' | 'NVFP4'>('FP16');
@@ -444,7 +446,7 @@ export default function Performance() {
           osl: testOSL,
           batch_size: testConcurrentUsers,
           tp_size: testTpSize,
-          ...(maxSeqLen != null ? { max_seq_len: maxSeqLen } : {}),
+          ...(effectiveContextLimit != null ? { max_seq_len: effectiveContextLimit } : {}),
           ...(prefillMaxSeqLen != null ? { prefill_max_seq_len: prefillMaxSeqLen } : {}),
           ...(decodeMaxSeqLen != null ? { decode_max_seq_len: decodeMaxSeqLen } : {}),
           ...(gpuMemoryUtilization != null ? { gpu_memory_utilization: gpuMemoryUtilization } : {}),
@@ -540,7 +542,6 @@ export default function Performance() {
       setVllmManualChunkedPrefill(null);
       setServingPolicyOverride(false);
       setServingManualContextLimit(null);
-      setServingManualPrefixCaching(null);
       setMemoryOverride(false);
       setGpuMemoryUtilization(null);
     }
@@ -747,7 +748,7 @@ export default function Performance() {
       backend: inferenceBackend,
       isl: testISL,
       osl: testOSL,
-      ...(maxSeqLen != null && { max_seq_len: maxSeqLen }),
+      ...(effectiveContextLimit != null && { max_seq_len: effectiveContextLimit }),
       ...(prefillMaxSeqLen != null && { prefill_max_seq_len: prefillMaxSeqLen }),
       ...(decodeMaxSeqLen != null && { decode_max_seq_len: decodeMaxSeqLen }),
       ...(gpuMemoryUtilization != null && { gpu_memory_utilization: gpuMemoryUtilization }),
@@ -782,7 +783,7 @@ export default function Performance() {
         decode_batch_size: parsePerfPhase(decodeCfg).batch,
       })
     };
-  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, maxSeqLen, prefillMaxSeqLen, decodeMaxSeqLen, gpuMemoryUtilization, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize]);
+  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, effectiveContextLimit, prefillMaxSeqLen, decodeMaxSeqLen, gpuMemoryUtilization, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize]);
 
   // Copy API request body to clipboard
   const handleCopyAPIRequest = async () => {
@@ -815,6 +816,7 @@ export default function Performance() {
     const quantFlag = (testWeightPrecision === 'INT4' || testWeightPrecision === 'INT8' || testWeightPrecision === 'MXFP4' || testWeightPrecision === 'NVFP4')
       ? ` \\\n  --quantization ${quantValue}`
       : '';
+    const cliMemoryFraction = (effectiveGpuMemoryUtilization ?? 0.9).toFixed(3);
 
     let cliCommand: string;
     if (isDisagg) {
@@ -825,7 +827,7 @@ export default function Performance() {
         return `# ${role} pool — ${ph.workers} worker(s), TP${ph.tp_size}${ph.pp_size > 1 ? ` PP${ph.pp_size}` : ''}, batch ${ph.batch_size}\n` +
           `vllm serve ${model} \\\n` +
           `  --tensor-parallel-size ${ph.tp_size}${ppFlag} \\\n` +
-          `  --gpu-memory-utilization 0.90 \\\n` +
+          `  --gpu-memory-utilization ${cliMemoryFraction} \\\n` +
           `  --dtype ${dtypeValue}${quantFlag} \\\n` +
           `  --kv-cache-dtype ${testKVCachePrecision.toLowerCase()}`;
       };
@@ -842,7 +844,7 @@ export default function Performance() {
       cliCommand = `vllm serve ${model} \\
   --tensor-parallel-size ${testResult.memory_analysis.tp_size}${ppFlag} \\
   --max-model-len auto \\
-  --gpu-memory-utilization 0.90 \\
+  --gpu-memory-utilization ${cliMemoryFraction} \\
   --dtype ${dtypeValue}${quantFlag} \\
   --kv-cache-dtype ${testKVCachePrecision.toLowerCase()} \\
   --max-num-seqs ${testResult.vllm_config?.max_num_seqs || 256}${testResult.vllm_config?.enable_chunked_prefill ? ' \\\n  --enable-chunked-prefill' : ''}`;
@@ -1197,18 +1199,16 @@ export default function Performance() {
         if (servingPolicyOverride) {
            setServingPolicyOverride(false);
            setServingManualContextLimit(null);
-           setServingManualPrefixCaching(null);
         } else {
           setServingPolicyOverride(true);
            if (testResult) {
              setServingManualContextLimit(testResult.vllm_config.max_model_len);
-             setServingManualPrefixCaching(testResult.vllm_config.enable_prefix_caching);
           }
         }
       },
       summary: [
         { k: 'context limit', v: servingPolicyOverride && servingManualContextLimit !== null ? `${servingManualContextLimit}` : testResult ? `${testResult.vllm_config.max_model_len}` : '—' },
-        { k: 'prefix caching', v: servingPolicyOverride && servingManualPrefixCaching !== null ? (servingManualPrefixCaching ? 'on' : 'off') : testResult ? (testResult.vllm_config.enable_prefix_caching ? 'on' : 'off') : '—' },
+        { k: 'prefix caching', v: testResult ? (testResult.vllm_config.enable_prefix_caching ? 'on' : 'off') : '—' },
       ],
       fields: [
         {
@@ -1221,12 +1221,9 @@ export default function Performance() {
         },
         {
           label: 'Prefix caching',
-          value: servingPolicyOverride && servingManualPrefixCaching !== null ? (servingManualPrefixCaching ? 'On' : 'Off') : testResult ? (testResult.vllm_config.enable_prefix_caching ? 'On' : 'Off') : '—',
+          value: testResult ? (testResult.vllm_config.enable_prefix_caching ? 'On' : 'Off') : '—',
           term: 'prefixCaching',
-          readonly: !servingPolicyOverride,
-          type: servingPolicyOverride ? 'select' as const : undefined,
-          options: servingPolicyOverride ? ['On', 'Off'] : undefined,
-          onChange: servingPolicyOverride ? (val: string) => setServingManualPrefixCaching(val === 'On') : undefined,
+          readonly: true,
         },
       ],
     },

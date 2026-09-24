@@ -797,6 +797,7 @@ def _build_serving_config(
     prefix: int = 0,
     max_seq_len: int | None = None,
     gpu_memory_utilization: float | None = None,
+    backend_version: str | None = None,
 ) -> ServingConfig:
     quant_map = {"fp8": "fp8", "fp8_block": "fp8", "int8": "int8"}
     quantization = quant_map.get(gemm or "", "auto")
@@ -805,11 +806,11 @@ def _build_serving_config(
         tensor_parallel_size=tp,
         max_model_len=max_seq_len or isl + osl,
         max_num_seqs=min(concurrency, 256),
-        gpu_memory_utilization=gpu_memory_utilization or _backend_memory_fraction(backend),
+        gpu_memory_utilization=gpu_memory_utilization or _backend_memory_fraction(backend, backend_version),
         enable_chunked_prefill=isl >= 4096 or concurrency >= 64,
         enable_prefix_caching=prefix > 0,
         quantization=quantization,
-        memory_fraction=gpu_memory_utilization or _backend_memory_fraction(backend),
+        memory_fraction=gpu_memory_utilization or _backend_memory_fraction(backend, backend_version),
         memory_fraction_kind=_backend_memory_fraction_kind(backend),
         runtime_memory_field=_backend_runtime_memory_field(backend),
     )
@@ -1033,7 +1034,7 @@ def post_recommend(
                 cfg.serving_config = _build_serving_config(
                     req.backend, cfg.tp or 1, req.isl, req.osl,
                     cfg.bs or req.target_concurrency or 1, cfg.gemm, req.prefix,
-                    max_seq_len=req.max_seq_len,
+                    max_seq_len=req.max_seq_len, backend_version=cfg.backend_version,
                 )
             if "memory" in includes:
                 cfg.memory_breakdown = _build_memory_breakdown(
@@ -1153,7 +1154,7 @@ def post_estimate(
         resp.serving_config = _build_serving_config(
             resp.backend or req.backend, req.tp_size, req.isl, req.osl,
             req.batch_size, resp.gemm, 0, max_seq_len=req.max_seq_len,
-            gpu_memory_utilization=req.gpu_memory_utilization,
+            gpu_memory_utilization=req.gpu_memory_utilization, backend_version=req.backend_version,
         )
 
     if "memory" in includes:
@@ -1178,7 +1179,7 @@ def post_memory(req: MemoryRequest):
             raw = estimate_kv_cache(
                 model_path=effective_path,
                 system=req.system,
-                backend=req.backend,
+                backend=_sdk_backend_id(req.backend),
                 backend_version=req.backend_version,
                 max_num_tokens=req.max_num_tokens,
                 max_batch_size=req.max_batch_size,

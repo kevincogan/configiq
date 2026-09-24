@@ -31,7 +31,7 @@ export async function GET() {
   const timeoutSeconds = gatewayTimeoutSeconds(DEFAULT_TIMEOUT_SECONDS)
 
   try {
-    const [systemsRes, modelsRes, backendsRes] = await Promise.all([
+    const [systemsRes, modelsRes, backendsResult] = await Promise.all([
       fetch(`${baseUrl}/systems?include=specs`, {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
@@ -46,16 +46,16 @@ export async function GET() {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
         signal: AbortSignal.timeout(timeoutSeconds * 1000),
-      }),
+      }).then(response => ({ response })).catch(() => ({ response: null })),
     ])
 
-    if (!systemsRes.ok || !modelsRes.ok || !backendsRes.ok) {
+    if (!systemsRes.ok || !modelsRes.ok) {
       return NextResponse.json(
         {
           status: 'failed',
           error: {
             code: 'AISIM_ERROR',
-            message: `AISimulators catalog fetch failed (systems ${systemsRes.status}, models ${modelsRes.status}, backends ${backendsRes.status})`,
+            message: `AISimulators catalog fetch failed (systems ${systemsRes.status}, models ${modelsRes.status})`,
           },
         },
         { status: 502, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
@@ -64,16 +64,22 @@ export async function GET() {
 
     let systemsData: { systems?: unknown[] }
     let modelsData: { models?: unknown[] }
-    let backendsData: { backends?: unknown[] }
+    let backendsData: { backends?: unknown[] } = {}
     try {
       systemsData = await systemsRes.json()
       modelsData = await modelsRes.json()
-      backendsData = await backendsRes.json()
     } catch {
       return NextResponse.json(
         { status: 'failed', error: { code: 'AISIM_INVALID_RESPONSE', message: 'AISimulators returned non-JSON response' } },
         { status: 502, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
       )
+    }
+    if (backendsResult.response?.ok) {
+      try {
+        backendsData = await backendsResult.response.json()
+      } catch {
+        backendsData = {}
+      }
     }
 
     return NextResponse.json(

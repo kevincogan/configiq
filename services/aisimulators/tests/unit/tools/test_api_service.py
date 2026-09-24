@@ -897,8 +897,8 @@ def make_mock_estimate_result():
 class TestEstimate:
 
     def test_gpu_memory_default_matches_backend(self):
-        assert app_module._default_gpu_memory_utilization("vllm") == pytest.approx(0.9)
-        assert app_module._default_gpu_memory_utilization("sglang") == pytest.approx(0.88)
+        assert app_module._backend_memory_fraction("vllm") == pytest.approx(0.9)
+        assert app_module._backend_memory_fraction("sglang") == pytest.approx(0.88)
 
     @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_success(self, mock_estimate):

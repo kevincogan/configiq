@@ -35,6 +35,7 @@ export function Settings() {
   const [costingsSaved, setCostingsSaved] = React.useState(false);
   const [costingsOpen, setCostingsOpen] = React.useState(false);
   const [validatedOpen, setValidatedOpen] = React.useState(false);
+  const backendDefaultAttempted = React.useRef(false);
 
   // Sync local model input once context has loaded from localStorage
   const modelSynced = React.useRef(false);
@@ -73,9 +74,10 @@ export function Settings() {
   }, [localModel, hfToken, modelOptions, catalogLoading, hydrated]);
 
   React.useEffect(() => {
-    if (hydrated && !backendVersion) {
+    if (hydrated && backendOptions.length > 0 && !backendDefaultAttempted.current) {
+      backendDefaultAttempted.current = true;
       const defaultVersion = backendOptions.find(b => b.id === inferenceBackend)?.defaultVersion;
-      if (defaultVersion) setBackendVersion(defaultVersion);
+      if (!backendVersion && defaultVersion) setBackendVersion(defaultVersion);
     }
   }, [hydrated, backendOptions, inferenceBackend, backendVersion, setBackendVersion]);
 
