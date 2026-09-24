@@ -31,7 +31,7 @@ export async function GET() {
   const timeoutSeconds = gatewayTimeoutSeconds(DEFAULT_TIMEOUT_SECONDS)
 
   try {
-    const [systemsRes, modelsRes] = await Promise.all([
+    const [systemsRes, modelsRes, backendsRes] = await Promise.all([
       fetch(`${baseUrl}/systems?include=specs`, {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
@@ -42,15 +42,20 @@ export async function GET() {
         cache: 'no-store',
         signal: AbortSignal.timeout(timeoutSeconds * 1000),
       }),
+      fetch(`${baseUrl}/backends`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(timeoutSeconds * 1000),
+      }),
     ])
 
-    if (!systemsRes.ok || !modelsRes.ok) {
+    if (!systemsRes.ok || !modelsRes.ok || !backendsRes.ok) {
       return NextResponse.json(
         {
           status: 'failed',
           error: {
             code: 'AISIM_ERROR',
-            message: `AISimulators catalog fetch failed (systems ${systemsRes.status}, models ${modelsRes.status})`,
+            message: `AISimulators catalog fetch failed (systems ${systemsRes.status}, models ${modelsRes.status}, backends ${backendsRes.status})`,
           },
         },
         { status: 502, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
@@ -59,9 +64,11 @@ export async function GET() {
 
     let systemsData: { systems?: unknown[] }
     let modelsData: { models?: unknown[] }
+    let backendsData: { backends?: unknown[] }
     try {
       systemsData = await systemsRes.json()
       modelsData = await modelsRes.json()
+      backendsData = await backendsRes.json()
     } catch {
       return NextResponse.json(
         { status: 'failed', error: { code: 'AISIM_INVALID_RESPONSE', message: 'AISimulators returned non-JSON response' } },
@@ -73,6 +80,7 @@ export async function GET() {
       {
         systems: systemsData.systems ?? [],
         models: modelsData.models ?? [],
+        backends: backendsData.backends ?? [],
         // Effective AISimulators request timeout (recommend/estimate), for the loader hint.
         timeoutSeconds: gatewayTimeoutSeconds(),
       },

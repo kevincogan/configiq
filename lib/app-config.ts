@@ -6,7 +6,6 @@ export interface AppConfig {
   defaultOpenModel: string;
   defaultFrontierModel: string;
   defaultBackend: string;
-  backendVersions: Record<string, string>;
   testedModels: string[];
   huggingFaceModels: string[];
   suggestedModelNames: string[];
@@ -21,11 +20,6 @@ const FALLBACK: AppConfig = {
   defaultOpenModel: 'Qwen/Qwen3-32B',
   defaultFrontierModel: 'claude-fable-5',
   defaultBackend: 'vllm',
-  backendVersions: {
-    'vllm': '0.24.0',
-    'tensorrt-llm': '11.2',
-    'sglang': '0.5.17',
-  },
   testedModels: [],
   huggingFaceModels: [],
   suggestedModelNames: [],
@@ -47,7 +41,6 @@ export async function loadAppConfig(): Promise<AppConfig> {
       defaultOpenModel: data.defaultOpenModel ?? FALLBACK.defaultOpenModel,
       defaultFrontierModel: data.defaultFrontierModel ?? FALLBACK.defaultFrontierModel,
       defaultBackend: data.defaultBackend ?? FALLBACK.defaultBackend,
-      backendVersions: data.backendVersions ?? FALLBACK.backendVersions,
       testedModels: data.testedModels ?? FALLBACK.testedModels,
       huggingFaceModels: data.huggingFaceModels ?? FALLBACK.huggingFaceModels,
       suggestedModelNames: data.suggestedModelNames ?? FALLBACK.suggestedModelNames,

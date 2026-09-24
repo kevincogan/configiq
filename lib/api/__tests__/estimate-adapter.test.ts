@@ -104,6 +104,16 @@ describe('fetchEstimateAsInferenceResult - request body construction', () => {
     })
   })
 
+  it('includes GPU memory utilization when provided', async () => {
+    const mockFetch = mockFetchOk(VALID_RESPONSE)
+    vi.stubGlobal('fetch', mockFetch)
+
+    await fetchEstimateAsInferenceResult({ ...VALID_INPUT, gpu_memory_utilization: 0.97 })
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string)
+    expect(body.gpu_memory_utilization).toBe(0.97)
+  })
+
   it('omits backend_version when not provided', async () => {
     const mockFetch = mockFetchOk(VALID_RESPONSE)
     vi.stubGlobal('fetch', mockFetch)

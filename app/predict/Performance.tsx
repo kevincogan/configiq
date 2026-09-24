@@ -130,7 +130,7 @@ export default function Performance() {
   console.log('Performance component mounting');
   const { hydrated, hfToken, defaultModel: settingsDefaultModel, inferenceBackend, backendVersion, costingsEnabled, preferredCloudProvider, pricingSource } = useSettings();
   const costings = useCostings(costingsEnabled, pricingSource);
-  const { gpuOptions: catalogGpus, modelOptions: catalogModels, modelSpecs, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
+  const { gpuOptions: catalogGpus, modelOptions: catalogModels, modelSpecs, backendOptions, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
 
   const [model, setModel] = React.useState('');
   const [gpu, setGpu] = React.useState(() => getAppConfig().defaultSystem);
@@ -220,6 +220,16 @@ export default function Performance() {
   const [vllmOverride, setVllmOverride] = React.useState(false);
   const [vllmManualMaxNumSeqs, setVllmManualMaxNumSeqs] = React.useState<number | null>(null);
   const [vllmManualChunkedPrefill, setVllmManualChunkedPrefill] = React.useState<boolean | null>(null);
+  const [servingPolicyOverride, setServingPolicyOverride] = React.useState(false);
+  const [servingManualContextLimit, setServingManualContextLimit] = React.useState<number | null>(null);
+  const [servingManualPrefixCaching, setServingManualPrefixCaching] = React.useState<boolean | null>(null);
+  const [memoryOverride, setMemoryOverride] = React.useState(false);
+  const [gpuMemoryUtilization, setGpuMemoryUtilization] = React.useState<number | null>(null);
+
+  const effectiveGpuMemoryUtilization = gpuMemoryUtilization
+    ?? testResult?.vllm_config.gpu_memory_utilization
+    ?? backendOptions?.find(backend => backend.id === inferenceBackend)?.memoryFraction
+    ?? null;
 
   // Save estimate modal
   const [showSaveModal, setShowSaveModal] = React.useState(false);
@@ -437,11 +447,11 @@ export default function Performance() {
           ...(maxSeqLen != null ? { max_seq_len: maxSeqLen } : {}),
           ...(prefillMaxSeqLen != null ? { prefill_max_seq_len: prefillMaxSeqLen } : {}),
           ...(decodeMaxSeqLen != null ? { decode_max_seq_len: decodeMaxSeqLen } : {}),
+          ...(gpuMemoryUtilization != null ? { gpu_memory_utilization: gpuMemoryUtilization } : {}),
           pp_size: testPpSize,
           backend: inferenceBackend,
           prefix: testPrefix > 0 ? testPrefix : undefined,
           vram_gb: currentCatalogGpu?.vramGb ?? null,
-          gpu_memory_utilization: currentCatalogGpu?.gpuMemoryUtilization,
           backend_version: backendVersion || undefined,
           hf_model_config: needsHfConfig(model, catalogModels) ? (hfConfig as Record<string, unknown> | null) : null,
           kvcache_quant_mode: testKVCachePrecision === 'FP8' ? 'fp8' :
@@ -521,13 +531,18 @@ export default function Performance() {
 
   // Reset overrides when major inputs change (model or GPU selection)
   React.useEffect(() => {
-    if (parallelismOverride || vllmOverride) {
+    if (parallelismOverride || vllmOverride || servingPolicyOverride || memoryOverride) {
       setParallelismOverride(false);
       setParallelismManualTP(null);
       setParallelismManualReplicas(null);
       setVllmOverride(false);
       setVllmManualMaxNumSeqs(null);
       setVllmManualChunkedPrefill(null);
+      setServingPolicyOverride(false);
+      setServingManualContextLimit(null);
+      setServingManualPrefixCaching(null);
+      setMemoryOverride(false);
+      setGpuMemoryUtilization(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, gpu]);
@@ -735,11 +750,11 @@ export default function Performance() {
       ...(maxSeqLen != null && { max_seq_len: maxSeqLen }),
       ...(prefillMaxSeqLen != null && { prefill_max_seq_len: prefillMaxSeqLen }),
       ...(decodeMaxSeqLen != null && { decode_max_seq_len: decodeMaxSeqLen }),
+      ...(gpuMemoryUtilization != null && { gpu_memory_utilization: gpuMemoryUtilization }),
       batch_size: testConcurrentUsers,
       tp_size: testResult?.memory_analysis.tp_size ?? testTpSize,
       pp_size: testResult?.parallelism_strategy.pp_size ?? testPpSize,
       vram_gb: currentCatalogGpu?.vramGb ?? null,
-      gpu_memory_utilization: currentCatalogGpu?.gpuMemoryUtilization,
       ...(testPrefix > 0 && { prefix: testPrefix }),
       ...(backendVersion && { backend_version: backendVersion }),
       ...(testWeightPrecision === 'FP8' && { gemm_quant_mode: 'fp8' }),
@@ -767,7 +782,7 @@ export default function Performance() {
         decode_batch_size: parsePerfPhase(decodeCfg).batch,
       })
     };
-  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, maxSeqLen, prefillMaxSeqLen, decodeMaxSeqLen, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize]);
+  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, maxSeqLen, prefillMaxSeqLen, decodeMaxSeqLen, gpuMemoryUtilization, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize]);
 
   // Copy API request body to clipboard
   const handleCopyAPIRequest = async () => {
@@ -911,6 +926,10 @@ export default function Performance() {
       }
     }
 
+    if (servingPolicyOverride && servingManualContextLimit !== null && servingManualContextLimit <= 0) {
+      warnings.push('Serving policy: context limit must be > 0');
+    }
+
     return warnings;
   };
 
@@ -1010,6 +1029,7 @@ export default function Performance() {
       summary: [
         { k: 'weights', v: actualWeightPrecision },
         { k: 'KV', v: testKVCachePrecision },
+        { k: 'GPU memory', v: effectiveGpuMemoryUtilization != null ? `${(effectiveGpuMemoryUtilization * 100).toFixed(1)}%` : 'auto' },
         ...(isMoeModel ? [{
           k: 'MoE',
           v: testMoeQuantMode === 'w4a16_mxfp4' ? 'W4A16' :
@@ -1062,7 +1082,33 @@ export default function Performance() {
           },
           help: 'W4A16: best quality, H100+. W4A8: ~2× faster on B200. CUTLASS: H100-optimized. TRT-LLM: B200 TRT-LLM variant.'
         }] : []),
+        {
+          label: 'GPU memory utilization',
+          value: effectiveGpuMemoryUtilization != null ? `${(effectiveGpuMemoryUtilization * 100).toFixed(1)}%` : 'auto',
+          term: 'gpuUtil',
+          readonly: !memoryOverride,
+          type: memoryOverride ? 'range' as const : undefined,
+          min: memoryOverride ? 10 : undefined,
+          max: memoryOverride ? 100 : undefined,
+          step: memoryOverride ? 0.5 : undefined,
+          rangeValue: memoryOverride && effectiveGpuMemoryUtilization != null ? effectiveGpuMemoryUtilization * 100 : undefined,
+          onChange: memoryOverride ? (val: number) => setGpuMemoryUtilization(val / 100) : undefined,
+          help: 'Range: 10–100%, in 0.5% steps. Leave on auto to use the backend-specific AISimulate default.',
+        },
       ],
+      badge: memoryOverride ? 'Manual override' : 'Auto-computed',
+      badgeColor: memoryOverride ? 'orange' : 'blue',
+      hasOverride: true,
+      isOverridden: memoryOverride,
+      onOverrideToggle: () => {
+        if (memoryOverride) {
+          setMemoryOverride(false);
+          setGpuMemoryUtilization(null);
+        } else {
+          setMemoryOverride(true);
+          if (effectiveGpuMemoryUtilization != null) setGpuMemoryUtilization(effectiveGpuMemoryUtilization);
+        }
+      },
     },
     {
       id: 'parallel',
@@ -1143,29 +1189,44 @@ export default function Performance() {
     {
       id: 'serving',
       title: 'Serving policy',
+      badge: servingPolicyOverride ? 'Manual override' : 'Auto-computed',
+      badgeColor: servingPolicyOverride ? 'orange' : 'blue',
+      hasOverride: true,
+      isOverridden: servingPolicyOverride,
+      onOverrideToggle: () => {
+        if (servingPolicyOverride) {
+           setServingPolicyOverride(false);
+           setServingManualContextLimit(null);
+           setServingManualPrefixCaching(null);
+        } else {
+          setServingPolicyOverride(true);
+           if (testResult) {
+             setServingManualContextLimit(testResult.vllm_config.max_model_len);
+             setServingManualPrefixCaching(testResult.vllm_config.enable_prefix_caching);
+          }
+        }
+      },
       summary: [
-        { k: 'context limit', v: testResult ? `${testResult.vllm_config.max_model_len}` : '—' },
-        { k: 'prefix caching', v: testResult ? (testResult.vllm_config.enable_prefix_caching ? 'on' : 'off') : '—' },
-        { k: 'memory', v: testResult ? `${(testResult.vllm_config.gpu_memory_utilization * 100).toFixed(0)}%` : '—' },
+        { k: 'context limit', v: servingPolicyOverride && servingManualContextLimit !== null ? `${servingManualContextLimit}` : testResult ? `${testResult.vllm_config.max_model_len}` : '—' },
+        { k: 'prefix caching', v: servingPolicyOverride && servingManualPrefixCaching !== null ? (servingManualPrefixCaching ? 'on' : 'off') : testResult ? (testResult.vllm_config.enable_prefix_caching ? 'on' : 'off') : '—' },
       ],
       fields: [
         {
           label: 'Serving context limit',
-          value: testResult ? `${testResult.vllm_config.max_model_len}` : '—',
+          value: servingPolicyOverride && servingManualContextLimit !== null ? `${servingManualContextLimit}` : testResult ? `${testResult.vllm_config.max_model_len}` : '—',
           term: 'maxModelLen',
-          readonly: true,
+          readonly: !servingPolicyOverride,
+          type: servingPolicyOverride ? 'number' as const : undefined,
+          onChange: servingPolicyOverride ? (val: string) => setServingManualContextLimit(parseInt(val) || 1) : undefined,
         },
         {
           label: 'Prefix caching',
-          value: testResult ? (testResult.vllm_config.enable_prefix_caching ? 'On' : 'Off') : '—',
+          value: servingPolicyOverride && servingManualPrefixCaching !== null ? (servingManualPrefixCaching ? 'On' : 'Off') : testResult ? (testResult.vllm_config.enable_prefix_caching ? 'On' : 'Off') : '—',
           term: 'prefixCaching',
-          readonly: true,
-        },
-        {
-          label: 'GPU memory utilization',
-          value: testResult ? `${(testResult.vllm_config.gpu_memory_utilization * 100).toFixed(0)}%` : '—',
-          term: 'gpuUtil',
-          readonly: true,
+          readonly: !servingPolicyOverride,
+          type: servingPolicyOverride ? 'select' as const : undefined,
+          options: servingPolicyOverride ? ['On', 'Off'] : undefined,
+          onChange: servingPolicyOverride ? (val: string) => setServingManualPrefixCaching(val === 'On') : undefined,
         },
       ],
     },

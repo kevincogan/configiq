@@ -8,12 +8,11 @@ import { getAppConfig } from '../app-config'
 const mockGetAppConfig = vi.mocked(getAppConfig)
 
 const BASE: AppConfig = {
-  defaultModel: '',
+  defaultBackend: '',
   defaultSystem: '',
+  defaultModel: '',
   defaultOpenModel: '',
   defaultFrontierModel: '',
-  defaultBackend: 'vllm',
-  backendVersions: {},
   testedModels: [],
   huggingFaceModels: [],
   suggestedModelNames: [],

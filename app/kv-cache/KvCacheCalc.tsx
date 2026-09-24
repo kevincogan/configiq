@@ -63,16 +63,13 @@ function invalidPhaseParallel(p: PhaseParallelInput): boolean {
 
 export default function KvCacheCalc() {
   const { hydrated, hfToken, defaultModel: settingsDefaultModel, inferenceBackend, backendVersion: settingsBackendVersion } = useSettings()
-  const { modelOptions: catalogModels, gpuOptions: catalogGpus, isLoading: catalogLoading } = useCatalog()
+  const { modelOptions: catalogModels, gpuOptions: catalogGpus, backendOptions, isLoading: catalogLoading } = useCatalog()
   const MODEL_OPTIONS = catalogModels
 
   const [model, setModel] = React.useState('')
   const [system, setSystem] = React.useState(() => getAppConfig().defaultSystem)
   const [backend, setBackend] = React.useState(() => getAppConfig().defaultBackend)
-  const [backendVersion, setBackendVersion] = React.useState(() => {
-    const cfg = getAppConfig()
-    return cfg.backendVersions[cfg.defaultBackend] ?? ''
-  })
+  const [backendVersion, setBackendVersion] = React.useState('')
 
   // Initialise model, backend, and version from settings once context has loaded from localStorage
   const fromSettings = React.useRef(false)
@@ -327,8 +324,9 @@ export default function KvCacheCalc() {
                   onChange={e => setBackend(e.target.value)}
                   className={styles.gpuSelect}
                 >
-                  <option value="vllm">vLLM</option>
-                  <option value="sglang">SGLang</option>
+                  {backendOptions.map(option => (
+                    <option key={option.id} value={option.id}>{option.id}</option>
+                  ))}
                 </select>
               </div>
               <div className={styles.field}>
@@ -338,7 +336,7 @@ export default function KvCacheCalc() {
                   id="kv-backend-ver"
                   value={backendVersion}
                   onChange={e => setBackendVersion(e.target.value)}
-                  placeholder={getAppConfig().backendVersions[backend] ?? 'latest'}
+                  placeholder={backendOptions.find(option => option.id === backend)?.defaultVersion ?? 'latest'}
                   className={styles.numberInput}
                 />
               </div>

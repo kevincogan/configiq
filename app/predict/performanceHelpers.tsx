@@ -136,7 +136,7 @@ export const GLOSSARY: Record<string, { title: string; body: string }> = {
   },
   gpuUtil: {
     title: 'GPU memory utilization',
-    body: 'Fraction of each GPU\'s memory vLLM is allowed to use for weights + KV cache. The rest is headroom for activations and fragmentation — typically 90%.',
+    body: 'Fraction of each GPU\'s memory available to the backend for weights and KV cache. AISimulate maps this generic value to the selected backend and uses a backend-specific default when left on auto.',
   },
   selfHosted: {
     title: 'Self-hosted (hardware only)',
