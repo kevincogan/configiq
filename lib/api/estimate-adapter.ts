@@ -31,6 +31,8 @@ export interface EstimateAdapterInput {
   tp_size: number
   pp_size?: number
   gpu_memory_utilization?: number
+  max_num_seqs?: number
+  enable_chunked_prefill?: boolean
   vram_gb?: number | null
   backend?: string
   backend_version?: string
@@ -119,6 +121,8 @@ export async function fetchEstimateAsInferenceResult(
 
   if (input.pp_size != null && input.pp_size > 1) body.pp_size = input.pp_size
   if (input.gpu_memory_utilization != null) body.gpu_memory_utilization = input.gpu_memory_utilization
+  if (input.max_num_seqs != null) body.max_num_seqs = input.max_num_seqs
+  if (input.enable_chunked_prefill != null) body.enable_chunked_prefill = input.enable_chunked_prefill
   if (input.backend_version) body.backend_version = input.backend_version
   if (input.prefix != null && input.prefix > 0) body.prefix = input.prefix
   if (input.kvcache_quant_mode) body.kvcache_quant_mode = input.kvcache_quant_mode

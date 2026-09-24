@@ -214,9 +214,6 @@ export default function Performance() {
   const assumptionsRef = React.useRef<HTMLDivElement>(null);
 
   // Manual override states
-  const [parallelismOverride, setParallelismOverride] = React.useState(false);
-  const [parallelismManualTP, setParallelismManualTP] = React.useState<number | null>(null);
-  const [parallelismManualReplicas, setParallelismManualReplicas] = React.useState<number | null>(null);
   const [vllmOverride, setVllmOverride] = React.useState(false);
   const [vllmManualMaxNumSeqs, setVllmManualMaxNumSeqs] = React.useState<number | null>(null);
   const [vllmManualChunkedPrefill, setVllmManualChunkedPrefill] = React.useState<boolean | null>(null);
@@ -450,6 +447,8 @@ export default function Performance() {
           ...(prefillMaxSeqLen != null ? { prefill_max_seq_len: prefillMaxSeqLen } : {}),
           ...(decodeMaxSeqLen != null ? { decode_max_seq_len: decodeMaxSeqLen } : {}),
           ...(gpuMemoryUtilization != null ? { gpu_memory_utilization: gpuMemoryUtilization } : {}),
+          ...(vllmOverride && vllmManualMaxNumSeqs != null ? { max_num_seqs: vllmManualMaxNumSeqs } : {}),
+          ...(vllmOverride && vllmManualChunkedPrefill != null ? { enable_chunked_prefill: vllmManualChunkedPrefill } : {}),
           pp_size: testPpSize,
           backend: inferenceBackend,
           prefix: testPrefix > 0 ? testPrefix : undefined,
@@ -533,10 +532,7 @@ export default function Performance() {
 
   // Reset overrides when major inputs change (model or GPU selection)
   React.useEffect(() => {
-    if (parallelismOverride || vllmOverride || servingPolicyOverride || memoryOverride) {
-      setParallelismOverride(false);
-      setParallelismManualTP(null);
-      setParallelismManualReplicas(null);
+    if (vllmOverride || servingPolicyOverride || memoryOverride) {
       setVllmOverride(false);
       setVllmManualMaxNumSeqs(null);
       setVllmManualChunkedPrefill(null);
@@ -752,6 +748,8 @@ export default function Performance() {
       ...(prefillMaxSeqLen != null && { prefill_max_seq_len: prefillMaxSeqLen }),
       ...(decodeMaxSeqLen != null && { decode_max_seq_len: decodeMaxSeqLen }),
       ...(gpuMemoryUtilization != null && { gpu_memory_utilization: gpuMemoryUtilization }),
+      ...(vllmOverride && vllmManualMaxNumSeqs != null && { max_num_seqs: vllmManualMaxNumSeqs }),
+      ...(vllmOverride && vllmManualChunkedPrefill != null && { enable_chunked_prefill: vllmManualChunkedPrefill }),
       batch_size: testConcurrentUsers,
       tp_size: testResult?.memory_analysis.tp_size ?? testTpSize,
       pp_size: testResult?.parallelism_strategy.pp_size ?? testPpSize,
@@ -783,7 +781,7 @@ export default function Performance() {
         decode_batch_size: parsePerfPhase(decodeCfg).batch,
       })
     };
-  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, effectiveContextLimit, prefillMaxSeqLen, decodeMaxSeqLen, gpuMemoryUtilization, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize]);
+  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, effectiveContextLimit, prefillMaxSeqLen, decodeMaxSeqLen, gpuMemoryUtilization, vllmOverride, vllmManualMaxNumSeqs, vllmManualChunkedPrefill, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize]);
 
   // Copy API request body to clipboard
   const handleCopyAPIRequest = async () => {
@@ -907,20 +905,6 @@ export default function Performance() {
   // Validation warnings for manual overrides
   const getValidationWarnings = (): string[] => {
     const warnings: string[] = [];
-
-    if (parallelismOverride) {
-      if (parallelismManualTP !== null) {
-        // TP must be power of 2
-        if (parallelismManualTP <= 0) {
-          warnings.push('Parallelism: Tensor parallel size must be > 0');
-        } else if ((parallelismManualTP & (parallelismManualTP - 1)) !== 0) {
-          warnings.push('Parallelism: Tensor parallel size should be a power of 2 (1, 2, 4, 8, 16)');
-        }
-      }
-      if (parallelismManualReplicas !== null && parallelismManualReplicas <= 0) {
-        warnings.push('Parallelism: Replica count must be > 0');
-      }
-    }
 
     if (vllmOverride) {
       if (vllmManualMaxNumSeqs !== null && vllmManualMaxNumSeqs <= 0) {
@@ -1115,25 +1099,6 @@ export default function Performance() {
     {
       id: 'parallel',
       title: 'Parallelism',
-      badge: parallelismOverride ? 'Manual override' : 'Auto-computed',
-      badgeColor: parallelismOverride ? 'orange' : 'blue',
-      hasOverride: true,
-      isOverridden: parallelismOverride,
-      onOverrideToggle: () => {
-        if (parallelismOverride) {
-          // Reset to auto
-          setParallelismOverride(false);
-          setParallelismManualTP(null);
-          setParallelismManualReplicas(null);
-        } else {
-          // Enable manual override - initialize with current computed values
-          setParallelismOverride(true);
-          if (testResult) {
-            setParallelismManualTP(testResult.memory_analysis.tp_size);
-            setParallelismManualReplicas(testResult.memory_analysis.replicas);
-          }
-        }
-      },
       summary: [
         { k: 'TP', v: `${testTpSize}` },
         { k: 'PP', v: `${testPpSize}` },

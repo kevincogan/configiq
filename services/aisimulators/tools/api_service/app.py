@@ -114,9 +114,13 @@ class EstimateRequest(BaseModel):
     max_seq_len: int | None = Field(default=None, gt=0, description="Maximum sequence length for KV cache allocation.")
     prefill_max_seq_len: int | None = Field(default=None, gt=0, description="Prefill worker sequence-length override.")
     decode_max_seq_len: int | None = Field(default=None, gt=0, description="Decode worker sequence-length override.")
+    prefix: int = Field(default=0, ge=0, description="Cached prefix tokens.")
     gpu_memory_utilization: float | None = Field(default=None, gt=0, le=1, description="GPU memory fraction for KV-cache capacity.")
     prefill_gpu_memory_utilization: float | None = Field(default=None, gt=0, le=1)
     decode_gpu_memory_utilization: float | None = Field(default=None, gt=0, le=1)
+    max_num_seqs: int | None = Field(default=None, gt=0, description="Maximum scheduler sequences.")
+    enable_chunked_prefill: bool | None = Field(default=None)
+    prefix_caching: bool | None = Field(default=None)
     tp_size: int = Field(default=1, description="Tensor parallel size.")
     pp_size: int = Field(default=1, description="Pipeline parallel size.")
     batch_size: int = Field(default=128, description="Batch size (max concurrent requests).")
@@ -516,7 +520,12 @@ def _aisimulate_recommendation_config(
         })
     raw: dict[str, Any] = {
         "traffic": {
-            "source": {"type": "synthetic", "input_tokens": req.isl, "output_tokens": req.osl},
+            "source": {
+                "type": "synthetic",
+                "input_tokens": req.isl,
+                "output_tokens": req.osl,
+                "cached_prefix_tokens": req.prefix,
+            },
             "load": load,
             "stop": {"requests": max(4, min(32, concurrency * 4))},
         },
@@ -587,8 +596,10 @@ def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
                 "moe_tensor": moe_tp or 1,
                 "moe_expert": moe_ep or 1,
             },
-            "scheduler": {"max_sequences": batch or req.batch_size},
+            "scheduler": {"max_sequences": req.max_num_seqs or batch or req.batch_size},
         }
+        if req.prefix_caching is not None:
+            result["kv_cache"] = {"prefix_caching": req.prefix_caching}
         memory_fraction = req.gpu_memory_utilization
         if role == "prefill" and req.prefill_gpu_memory_utilization is not None:
             memory_fraction = req.prefill_gpu_memory_utilization
@@ -596,6 +607,7 @@ def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
             memory_fraction = req.decode_gpu_memory_utilization
         if memory_fraction is not None:
             result["kv_cache"] = {
+                **(result.get("kv_cache") or {}),
                 "capacity": {"type": "default", "memory_fraction": memory_fraction},
             }
         if role != "agg":
@@ -608,7 +620,12 @@ def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
     }
     raw = {
         "traffic": {
-            "source": {"type": "synthetic", "input_tokens": req.isl, "output_tokens": req.osl},
+            "source": {
+                "type": "synthetic",
+                "input_tokens": req.isl,
+                "output_tokens": req.osl,
+                "cached_prefix_tokens": req.prefix,
+            },
             "load": {"type": "concurrency", "concurrency": req.batch_size},
             "stop": {"requests": 1},
         },
@@ -621,6 +638,10 @@ def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
             "database_mode": req.database_mode,
             "context_length": req.max_seq_len or req.isl + req.osl,
             "workers": workers,
+            "gemm_quant_mode": req.gemm_quant_mode,
+            "moe_quant_mode": req.moe_quant_mode,
+            "kvcache_quant_mode": req.kvcache_quant_mode,
+            "enable_chunked_prefill": req.enable_chunked_prefill,
         },
     }
     return CorePredictionConfig.model_validate(raw)
@@ -798,6 +819,9 @@ def _build_serving_config(
     max_seq_len: int | None = None,
     gpu_memory_utilization: float | None = None,
     backend_version: str | None = None,
+    max_num_seqs: int | None = None,
+    enable_chunked_prefill: bool | None = None,
+    prefix_caching: bool | None = None,
 ) -> ServingConfig:
     quant_map = {"fp8": "fp8", "fp8_block": "fp8", "int8": "int8"}
     quantization = quant_map.get(gemm or "", "auto")
@@ -805,10 +829,10 @@ def _build_serving_config(
         backend=backend,
         tensor_parallel_size=tp,
         max_model_len=max_seq_len or isl + osl,
-        max_num_seqs=min(concurrency, 256),
+        max_num_seqs=min(max_num_seqs or concurrency, 256),
         gpu_memory_utilization=gpu_memory_utilization or _backend_memory_fraction(backend, backend_version),
-        enable_chunked_prefill=isl >= 4096 or concurrency >= 64,
-        enable_prefix_caching=prefix > 0,
+        enable_chunked_prefill=enable_chunked_prefill if enable_chunked_prefill is not None else isl >= 4096 or concurrency >= 64,
+        enable_prefix_caching=prefix_caching if prefix_caching is not None else prefix > 0,
         quantization=quantization,
         memory_fraction=gpu_memory_utilization or _backend_memory_fraction(backend, backend_version),
         memory_fraction_kind=_backend_memory_fraction_kind(backend),
@@ -1160,6 +1184,8 @@ def post_estimate(
             resp.backend or req.backend, req.tp_size, req.isl, req.osl,
             req.batch_size, resp.gemm, 0, max_seq_len=req.max_seq_len,
             gpu_memory_utilization=req.gpu_memory_utilization, backend_version=req.backend_version,
+            max_num_seqs=req.max_num_seqs, enable_chunked_prefill=req.enable_chunked_prefill,
+            prefix_caching=req.prefix_caching,
         )
 
     if "memory" in includes:

@@ -977,6 +977,24 @@ class TestEstimate:
 
         assert config.engine.workers.aggregated.kv_cache.capacity.memory_fraction == pytest.approx(0.97)
 
+    def test_prediction_config_uses_serving_controls(self):
+        body = {
+            **VALID_ESTIMATE_BODY,
+            "prefix": 512,
+            "max_num_seqs": 64,
+            "enable_chunked_prefill": True,
+            "gemm_quant_mode": "fp8",
+            "kvcache_quant_mode": "fp8",
+        }
+        request = app_module.EstimateRequest.model_validate(body)
+        config = app_module._aisimulate_prediction_config(request)
+
+        assert config.traffic.source.cached_prefix_tokens == 512
+        assert config.engine.workers.aggregated.scheduler.max_sequences == 64
+        assert config.engine.enable_chunked_prefill is True
+        assert config.engine.gemm_quant_mode == "fp8"
+        assert config.engine.kvcache_quant_mode == "fp8"
+
     @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_disagg_mode(self, mock_estimate):
         mock_estimate.return_value = MockPredictionResult(

@@ -114,6 +114,21 @@ describe('fetchEstimateAsInferenceResult - request body construction', () => {
     expect(body.gpu_memory_utilization).toBe(0.97)
   })
 
+  it('includes serving controls when provided', async () => {
+    const mockFetch = mockFetchOk(VALID_RESPONSE)
+    vi.stubGlobal('fetch', mockFetch)
+
+    await fetchEstimateAsInferenceResult({
+      ...VALID_INPUT,
+      max_num_seqs: 64,
+      enable_chunked_prefill: true,
+    })
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string)
+    expect(body.max_num_seqs).toBe(64)
+    expect(body.enable_chunked_prefill).toBe(true)
+  })
+
   it('omits backend_version when not provided', async () => {
     const mockFetch = mockFetchOk(VALID_RESPONSE)
     vi.stubGlobal('fetch', mockFetch)
