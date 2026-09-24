@@ -84,7 +84,7 @@
   transform: translateY(-50%);
   pointer-events: none;
 }
-.autoChipWrapper :global(.pf-v5-c-label) {
+.autoChipWrapper :global(.pf-v6-c-label) {
   font-size: 12px;
   font-weight: 500;
 }
@@ -189,7 +189,7 @@
   background: var(--blue);
   color: #fff;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--pf-t--global--border--radius--pill, 999px);
   font-family: var(--sans);
   font-size: 15px;
   font-weight: 600;

@@ -29,6 +29,19 @@ const nextConfig = {
     "@patternfly/react-icons",
     "@patternfly/react-table",
   ],
+  webpack(config, { dev }) {
+    if (dev) {
+      config.cache = { type: 'memory' };
+    }
+    config.ignoreWarnings = [
+      ...(config.ignoreWarnings || []),
+      {
+        module: /@patternfly[\\/]react-styles[\\/]css[\\/]components[\\/](ActionList|OverflowMenu)/,
+        message: /autoprefixer: start value has mixed support/,
+      },
+    ];
+    return config;
+  },
 };
 
 module.exports = nextConfig;

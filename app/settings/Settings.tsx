@@ -317,17 +317,18 @@ export function Settings() {
           </button>
           {costingsOpen && (
             <div className={styles.fieldWrap} id="costings-settings-panel">
-              <Switch
-                id="settings-costings-enabled"
-                label="Enabled"
-                labelOff="Disabled"
-                isChecked={costingsEnabled}
-                onChange={(_e, checked) => {
-                  setCostingsEnabled(checked);
-                  setCostingsSaved(true);
-                  setTimeout(() => setCostingsSaved(false), 2000);
-                }}
-              />
+              <div className={styles.toggle}>
+                <Switch
+                  id="settings-costings-enabled"
+                  label={costingsEnabled ? 'Enabled' : 'Disabled'}
+                  isChecked={costingsEnabled}
+                  onChange={(_e, checked) => {
+                    setCostingsEnabled(checked);
+                    setCostingsSaved(true);
+                    setTimeout(() => setCostingsSaved(false), 2000);
+                  }}
+                />
+              </div>
               {costingsEnabled && (
                 <>
                 </>

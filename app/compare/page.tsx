@@ -4,7 +4,7 @@ import * as React from 'react';
 import {
   PageSection,
   Title,
-  Text,
+  Content,
   Button,
   Card,
   CardBody,
@@ -231,15 +231,15 @@ export default function ComparePage() {
 
   if (estimates.length === 0) {
     return (
-      <PageSection variant="light">
+      <PageSection>
         <div style={{ maxWidth: '600px', margin: '80px auto', textAlign: 'center' }}>
           <div style={{ fontSize: '48px', marginBottom: '24px' }}>📊</div>
           <Title headingLevel="h1" size="2xl" style={{ marginBottom: '12px' }}>
             No saved estimates yet
           </Title>
-          <Text style={{ marginBottom: '32px', color: '#6a6e73', fontSize: '15px' }}>
+          <Content component="p" style={{ marginBottom: '32px', color: '#6a6e73', fontSize: '15px' }}>
             Run Predict performance and click &ldquo;Save estimate&rdquo; to compare configurations here.
-          </Text>
+          </Content>
           <Link href="/predict">
             <Button variant="primary" size="lg">
               → Go to Predict performance
@@ -284,9 +284,9 @@ export default function ComparePage() {
             </div>
             {showCioSummary && (
               <div style={{ marginTop: '16px' }}>
-                <Text style={{ marginBottom: '16px', lineHeight: 1.6 }}>
+                <Content component="p" style={{ marginBottom: '16px', lineHeight: 1.6 }}>
                   {generateCioSummary()}
-                </Text>
+                </Content>
                 <Button variant="secondary" size="sm" onClick={copyCioSummary}>
                   Copy for CIO deck
                 </Button>

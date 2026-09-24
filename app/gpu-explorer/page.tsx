@@ -8,7 +8,7 @@ import * as React from 'react';
 import {
   PageSection,
   Title,
-  TextContent,
+  Content as TextContent,
   ToggleGroup,
   ToggleGroupItem,
   Card,
@@ -16,7 +16,7 @@ import {
   Flex,
   FlexItem,
   Label,
-  Text
+  Content as Text
 } from "@patternfly/react-core";
 import { useCatalog, type GpuOption } from '@/lib/hooks/useCatalog';
 import { useSettings } from '@/contexts/SettingsContext';

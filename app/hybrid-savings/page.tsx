@@ -1,5 +1,5 @@
 "use client";
-import { PageSection, Title, TextContent, EmptyState, EmptyStateBody } from "@patternfly/react-core";
+import { PageSection, Title, Content as TextContent, EmptyState, EmptyStateBody } from "@patternfly/react-core";
 import { CubesIcon } from "@patternfly/react-icons";
 import ComingSoonRibbon from "@/components/ComingSoonRibbon/ComingSoonRibbon";
 import styles from './hybrid-savings.module.css';
