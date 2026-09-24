@@ -1802,7 +1802,7 @@ export default function Performance() {
       {testResult && testResult.performance && (
         <div className={styles.card} style={{ marginBottom: 20 }}>
           <Accordion>
-            <AccordionItem>
+            <AccordionItem isExpanded={expanded.includes('perf')}>
               <AccordionToggle
                 id="perf-toggle"
                 onClick={() => setExpanded(
@@ -1811,7 +1811,7 @@ export default function Performance() {
               >
                 <span style={{ fontWeight: 600 }}>Estimated serving performance</span>
               </AccordionToggle>
-              <AccordionContent hidden={!expanded.includes('perf')}>
+              <AccordionContent>
                 <div className={styles.cardBody}>
                   <div className={styles.paramGrid}>
                     <div>
@@ -2111,7 +2111,7 @@ export default function Performance() {
 
           <Accordion asDefinitionList={false}>
             {buildAccordionSections().map((sec) => (
-              <AccordionItem key={sec.id}>
+              <AccordionItem key={sec.id} isExpanded={expanded.includes(sec.id)}>
                 <AccordionToggle
                   id={`acc-${sec.id}`}
                   onClick={() => toggleAcc(sec.id)}
@@ -2142,7 +2142,7 @@ export default function Performance() {
                     )}
                   </span>
                 </AccordionToggle>
-                <AccordionContent hidden={!expanded.includes(sec.id)}>
+                <AccordionContent>
                   <div className={styles.accGrid}>
                     {sec.fields.map((f: any) => (
                       <div key={f.label} className={styles.accField}>

@@ -40,7 +40,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { costingsEnabled } = useSettings();
 
   const masthead = (
-    <Masthead style={{ backgroundColor: "#1a1a1a", borderBottom: "1px solid #2d2d2d" }}>
+    <Masthead display={{ default: 'inline' }} style={{ backgroundColor: "#1a1a1a", borderBottom: "1px solid #2d2d2d" }}>
       <MastheadToggle>
         <PageToggleButton variant="plain" aria-label="Navigation" id="nav-toggle">
           <BarsIcon color="white" />
@@ -97,6 +97,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     fontWeight: 500,
     fontFamily: '"Plus Jakarta Sans", system-ui, sans-serif',
     color: isActive ? '#ffffff' : 'rgba(255,255,255,0.85)',
+    backgroundColor: isActive ? '#0066cc' : 'transparent',
     padding: '9px 16px',
     textDecoration: 'none',
     borderBottom: 'none',
