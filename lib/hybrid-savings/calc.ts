@@ -129,7 +129,8 @@ export interface HybridComparison {
 
 const MILLION = 1_000_000
 const SECONDS_PER_HOUR = 3_600
-const DEFAULT_SEARCH_MAXIMUM = 1_000_000_000_000
+export const HYBRID_PLANNING_HORIZON_TOKENS = 1_000_000_000_000
+const DEFAULT_SEARCH_MAXIMUM = HYBRID_PLANNING_HORIZON_TOKENS
 const MAX_REPLACEMENT_CYCLES = 100
 
 function finiteNonNegative(value: number): number {
@@ -156,23 +157,59 @@ function optionCosts(
   }
 }
 
-export function workloadFacts(workload: HybridWorkload) {
+function workloadMix(workload: HybridWorkload) {
   const monthlyInputTokens = finiteNonNegative(workload.monthlyInputTokens)
   const monthlyOutputTokens = finiteNonNegative(workload.monthlyOutputTokens)
   const monthlyTokens = monthlyInputTokens + monthlyOutputTokens
-  const averageTokensPerRequest =
-    positive(workload.averageInputTokens) + positive(workload.averageOutputTokens)
-  const monthlyRequests = monthlyTokens / averageTokensPerRequest
+  const averageInputTokens = positive(workload.averageInputTokens)
+  const averageOutputTokens = positive(workload.averageOutputTokens)
+  const averageTokensPerRequest = averageInputTokens + averageOutputTokens
+  const inputShare = monthlyTokens > 0
+    ? monthlyInputTokens / monthlyTokens
+    : averageInputTokens / averageTokensPerRequest
+  const outputShare = 1 - inputShare
+  /*
+   * Monthly input/output totals and a representative request shape are two
+   * independent user inputs. When their ratios differ, dividing total tokens
+   * by total tokens/request can claim fewer requests than are needed to carry
+   * either the input or output volume. Use the larger side's implied request
+   * count so the infrastructure comparison never silently drops work.
+   */
+  const requestsPerBilledToken = Math.max(
+    inputShare / averageInputTokens,
+    outputShare / averageOutputTokens,
+  )
+
+  return {
+    monthlyInputTokens,
+    monthlyOutputTokens,
+    monthlyTokens,
+    averageInputTokens,
+    averageOutputTokens,
+    averageTokensPerRequest,
+    inputShare,
+    outputShare,
+    requestsPerBilledToken,
+  }
+}
+
+function requestsAtVolume(workload: HybridWorkload, volume: number): number {
+  return finiteNonNegative(volume) * workloadMix(workload).requestsPerBilledToken
+}
+
+export function workloadFacts(workload: HybridWorkload) {
+  const mix = workloadMix(workload)
+  const monthlyRequests = mix.monthlyTokens * mix.requestsPerBilledToken
   const peakRequestsPerSecond =
     (monthlyRequests /
       (positive(workload.activeHoursPerMonth) * SECONDS_PER_HOUR)) *
     positive(workload.peakToAverage)
 
   return {
-    monthlyInputTokens,
-    monthlyOutputTokens,
-    monthlyTokens,
-    averageTokensPerRequest,
+    monthlyInputTokens: mix.monthlyInputTokens,
+    monthlyOutputTokens: mix.monthlyOutputTokens,
+    monthlyTokens: mix.monthlyTokens,
+    averageTokensPerRequest: mix.averageTokensPerRequest,
     monthlyRequests,
     peakRequestsPerSecond,
   }
@@ -184,16 +221,10 @@ export function hostedCostAtVolume(
   assumptions: CostAssumptions,
   volume: number,
 ): CostOption {
-  const facts = workloadFacts(workload)
   const safeVolume = finiteNonNegative(volume)
-  const inputShare = facts.monthlyTokens > 0
-    ? facts.monthlyInputTokens / facts.monthlyTokens
-    : 0.8
+  const inputShare = workloadMix(workload).inputShare
   const inputTokens = safeVolume * inputShare
   const outputTokens = safeVolume - inputTokens
-  const tokenUsage =
-    (inputTokens / MILLION) * finiteNonNegative(hostedPrice.inputPerMillion) +
-    (outputTokens / MILLION) * finiteNonNegative(hostedPrice.outputPerMillion)
   const fixed = finiteNonNegative(assumptions.hostedFixedMonthly)
   const operations =
     finiteNonNegative(assumptions.hostedOperationsFte) *
@@ -209,7 +240,7 @@ export function hostedCostAtVolume(
     { label: 'Implementation amortization', monthlyCost: implementation, includedInMarginal: false },
   ]
   const costs = optionCosts(breakdown, assumptions.costLens)
-  const requests = safeVolume / facts.averageTokensPerRequest
+  const requests = requestsAtVolume(workload, safeVolume)
 
   return {
     key: 'hosted',
@@ -232,21 +263,31 @@ export function candidateCapacityTokens(
   candidate: InfrastructureCandidate,
   planningCapacityUsePct = 100,
 ): number {
-  const replicas = Math.max(Math.ceil(positive(candidate.replicasNeeded)), 1)
-  const outputTokensPerSecondPerReplica =
-    positive(candidate.clusterOutputTokensPerSecond) / replicas
-  const totalTokensPerOutputToken =
-    (positive(workload.averageInputTokens) + positive(workload.averageOutputTokens)) /
-    positive(workload.averageOutputTokens)
+  if (
+    !Number.isFinite(candidate.clusterOutputTokensPerSecond) ||
+    candidate.clusterOutputTokensPerSecond <= 0 ||
+    !Number.isFinite(candidate.replicasNeeded) ||
+    candidate.replicasNeeded <= 0 ||
+    !Number.isFinite(candidate.gpusPerReplica) ||
+    candidate.gpusPerReplica <= 0
+  ) {
+    return 0
+  }
 
-  return (
-    outputTokensPerSecondPerReplica *
+  const replicas = Math.max(Math.ceil(candidate.replicasNeeded), 1)
+  const outputTokensPerSecondPerReplica =
+    candidate.clusterOutputTokensPerSecond / replicas
+  const mix = workloadMix(workload)
+  const requestsPerSecondPerReplica =
+    outputTokensPerSecondPerReplica / mix.averageOutputTokens
+  const monthlyRequestCapacity =
+    requestsPerSecondPerReplica *
     Math.min(positive(planningCapacityUsePct, 100), 100) / 100 *
-    totalTokensPerOutputToken *
     positive(workload.activeHoursPerMonth) *
     SECONDS_PER_HOUR /
     positive(workload.peakToAverage)
-  )
+
+  return monthlyRequestCapacity / positive(mix.requestsPerBilledToken)
 }
 
 function deploymentForVolume(
@@ -317,6 +358,9 @@ function rentedCostForCandidate(
   assumptions: CostAssumptions,
   volume: number,
 ): CostOption | null {
+  if (candidateCapacityTokens(workload, candidate, assumptions.planningCapacityUsePct) <= 0) {
+    return null
+  }
   const cloudGpusPerInstance = Math.max(
     Math.ceil(positive(candidate.cloudGpusPerInstance ?? 1)),
     1,
@@ -340,17 +384,13 @@ function rentedCostForCandidate(
     : assumptions.cloudBillingMode
 
   if (safeVolume > 0 && effectiveBillingMode === 'scale-to-zero') {
-    const facts = workloadFacts(workload)
-    const outputShare = facts.monthlyTokens > 0
-      ? facts.monthlyOutputTokens / facts.monthlyTokens
-      : workload.averageOutputTokens /
-        (positive(workload.averageInputTokens) + positive(workload.averageOutputTokens))
-    const outputTokens = safeVolume * outputShare
+    const equivalentOutputTokens =
+      requestsAtVolume(workload, safeVolume) * positive(workload.averageOutputTokens)
     const outputTokensPerSecondPerReplica =
       positive(candidate.clusterOutputTokensPerSecond) /
       Math.max(Math.ceil(positive(candidate.replicasNeeded)), 1) *
       Math.min(positive(assumptions.planningCapacityUsePct, 100), 100) / 100
-    const replicaHours = outputTokens /
+    const replicaHours = equivalentOutputTokens /
       outputTokensPerSecondPerReplica /
       SECONDS_PER_HOUR
     /*
@@ -363,9 +403,15 @@ function rentedCostForCandidate(
      * scale-to-zero cost monotonic.
      */
     const continuousReplicaLoad = safeVolume / positive(deployment.capacityPerReplica)
+    // capacityPerReplica is peak-adjusted, so continuousReplicaLoad is the
+    // number of replicas needed at the workload peak. Instance runtime is
+    // driven by average work, not by assuming that peak parallelism persists
+    // for the entire month. Divide the peak load by the peak-to-average ratio
+    // before crediting simultaneous replicas inside one whole instance.
+    const averageReplicaLoad = continuousReplicaLoad / positive(workload.peakToAverage)
     const parallelReplicasPerInstance = Math.min(
       layout.replicasPerInstance,
-      Math.max(continuousReplicaLoad, 1),
+      Math.max(averageReplicaLoad, 1),
     )
     billableInstanceHours =
       replicaHours /
@@ -399,8 +445,7 @@ function rentedCostForCandidate(
     { label: 'Implementation amortization', monthlyCost: implementation, includedInMarginal: false },
   ]
   const costs = optionCosts(breakdown, assumptions.costLens)
-  const facts = workloadFacts(workload)
-  const requests = safeVolume / facts.averageTokensPerRequest
+  const requests = requestsAtVolume(workload, safeVolume)
 
   return {
     key: 'rented',
@@ -427,6 +472,9 @@ function ownedCostForCandidate(
   volume: number,
 ): CostOption | null {
   if (candidate.purchasePricePerReplica == null || candidate.purchasePricePerReplica <= 0) {
+    return null
+  }
+  if (candidateCapacityTokens(workload, candidate, assumptions.planningCapacityUsePct) <= 0) {
     return null
   }
 
@@ -494,7 +542,11 @@ function ownedCostForCandidate(
     acquisition * finiteNonNegative(assumptions.annualMaintenancePct) / 100 / 12
   const energy =
     (serverCount * finiteNonNegative(assumptions.ownedBaseSystemPowerWattsPerServer) +
-      deployment.gpuCount * finiteNonNegative(candidate.tdpWattsPerGpu ?? 0)) /
+      // The acquisition price and capacity represent the complete installed
+      // server. Charge every installed GPU consistently instead of assigning
+      // zero power to spare GPUs that are still part of that server. TDP is a
+      // planning proxy; a production case should replace it with metered draw.
+      billedGpuCount * finiteNonNegative(candidate.tdpWattsPerGpu ?? 0)) /
     1_000 *
     positive(assumptions.hoursPerMonth, 730) *
     positive(assumptions.pue, 1) *
@@ -521,8 +573,7 @@ function ownedCostForCandidate(
     { label: 'Implementation amortization', monthlyCost: implementation, includedInMarginal: false },
   ]
   const costs = optionCosts(breakdown, assumptions.costLens)
-  const facts = workloadFacts(workload)
-  const requests = safeVolume / facts.averageTokensPerRequest
+  const requests = requestsAtVolume(workload, safeVolume)
 
   return {
     key: 'owned',
@@ -589,9 +640,9 @@ function searchVolumes(
       assumptions.planningCapacityUsePct,
     )
     if (!Number.isFinite(step) || step <= 0) continue
-    for (let multiplier = 1; multiplier <= 80; multiplier += 1) {
+    const boundaryCount = Math.floor(maximum / step)
+    for (let multiplier = 1; multiplier <= boundaryCount; multiplier += 1) {
       const boundary = Math.round(step * multiplier)
-      if (boundary > maximum) break
       volumes.add(Math.max(boundary - 1, 1))
       volumes.add(boundary)
       volumes.add(Math.min(boundary + 1, maximum))
@@ -710,9 +761,9 @@ function chartVolumes(
       assumptions.planningCapacityUsePct,
     )
     if (!Number.isFinite(step) || step <= 0) continue
-    for (let multiplier = 1; multiplier <= 60; multiplier += 1) {
+    const boundaryCount = Math.floor(maximum / step)
+    for (let multiplier = 1; multiplier <= boundaryCount; multiplier += 1) {
       const boundary = Math.round(step * multiplier)
-      if (boundary > maximum) break
       volumes.add(Math.max(boundary - 1, 0))
       volumes.add(boundary)
       volumes.add(Math.min(boundary + 1, maximum))

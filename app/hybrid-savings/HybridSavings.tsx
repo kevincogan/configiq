@@ -24,7 +24,8 @@ import {
   ToggleGroupItem,
 } from '@patternfly/react-core'
 import { useSettings } from '@/contexts/SettingsContext'
-import type { RecommendResponse, RecommendResult } from '@/lib/api/recommend'
+import type { RecommendResult } from '@/lib/api/recommend'
+import { readRecommendStream } from '@/lib/api/recommend-stream'
 import { useCatalog, type GpuOption, type ModelSpec } from '@/lib/hooks/useCatalog'
 import {
   useCostings,
@@ -33,6 +34,7 @@ import {
 import {
   calculateHybridComparison,
   hostedCostAtVolume,
+  HYBRID_PLANNING_HORIZON_TOKENS,
   workloadFacts,
   type CloudBillingMode,
   type CostAssumptions,
@@ -161,6 +163,15 @@ const DEFAULT_ASSUMPTIONS: CostAssumptions = {
   rentedFixedMonthly: 0,
   ownedFixedMonthly: 0,
 }
+
+// Capacity comparisons need a repeatable multi-request load. The original
+// Hybrid Savings request sent the workload's (often tiny) peak request rate,
+// so the returned throughput could describe offered demand rather than the
+// sustainable capacity of a serving replica. Concurrency 32 is the
+// AISimulators reference load used for recommendation
+// examples and is high enough to exercise continuous batching while the SLA
+// constraints still reject overloaded configurations.
+const AISIMULATORS_CAPACITY_CONCURRENCY = 32
 
 const formatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 })
 const currencyFormatter = new Intl.NumberFormat('en-US', {
@@ -505,6 +516,13 @@ export default function HybridSavings() {
     error: catalogError,
   } = useCatalog()
   const costings = useCostings(costingsEnabled, pricingSource)
+  const staleCostingSources = React.useMemo(
+    () => Object.entries(costings.health?.sources ?? {})
+      .filter(([, status]) => status.stale)
+      .map(([source]) => source),
+    [costings.health],
+  )
+  const costingInputsStale = costings.modelsStale || staleCostingSources.length > 0
 
   const [model, setModel] = React.useState('')
   const [modelSearch, setModelSearch] = React.useState('')
@@ -584,6 +602,14 @@ export default function HybridSavings() {
     peakToAverage,
   ])
   const facts = React.useMemo(() => workloadFacts(workload), [workload])
+  const requestMixMismatch = React.useMemo(() => {
+    const monthlyTokens = monthlyInputTokens + monthlyOutputTokens
+    const averageTokens = averageInputTokens + averageOutputTokens
+    if (monthlyTokens <= 0 || averageTokens <= 0) return false
+    return Math.abs(
+      monthlyInputTokens / monthlyTokens - averageInputTokens / averageTokens,
+    ) > 0.01
+  }, [monthlyInputTokens, monthlyOutputTokens, averageInputTokens, averageOutputTokens])
   const hostedOfferChoices = React.useMemo<HostedOfferChoice[]>(
     () => hostedProviderOffers.map((offer, index) => ({
       key: hostedOfferKey(offer),
@@ -727,7 +753,10 @@ export default function HybridSavings() {
         try {
           const response = await fetch('/api/recommend', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'text/event-stream',
+            },
             signal: controller.signal,
             body: JSON.stringify({
               model_path: model,
@@ -737,12 +766,16 @@ export default function HybridSavings() {
               osl: Math.max(Math.round(averageOutputTokens), 1),
               ttft: Math.max(targetTtftMs, 1),
               tpot: Math.max(targetTpotMs, 1),
-              target_request_rate: Math.max(facts.peakRequestsPerSecond, 0.000001),
+              // Use a stable, SLA-constrained capacity load rather than the
+              // workload's current request rate. The latter can measure only
+              // sparse offered demand, not serving capacity. The response is
+              // normalized to one replica before the cost engine scales it.
+              target_concurrency: AISIMULATORS_CAPACITY_CONCURRENCY,
               top_n: 5,
             }),
           })
-          const data = await response.json() as RecommendResponse
-          if (response.ok && data.status === 'completed') {
+          const data = await readRecommendStream(response)
+          if (data.status === 'completed') {
             const cloudOffers = resolveRentedCloudOffers(
               gpu.systemId,
               costings.gpuCloudRates.get(gpu.systemId),
@@ -798,6 +831,7 @@ export default function HybridSavings() {
 
   const invalidWorkload =
     facts.monthlyTokens <= 0 ||
+    facts.monthlyTokens > HYBRID_PLANNING_HORIZON_TOKENS ||
     averageInputTokens <= 0 ||
     averageOutputTokens <= 0 ||
     activeHoursPerMonth <= 0 ||
@@ -852,8 +886,8 @@ export default function HybridSavings() {
             </div>
 
             <div className={styles.workloadGrid}>
-              <NumberField id="hybrid-input-tokens" label="Input tokens per month" value={monthlyInputTokens} min={0} step={1_000_000} formatWithCommas onChange={setMonthlyInputTokens} />
-              <NumberField id="hybrid-output-tokens" label="Output tokens per month" value={monthlyOutputTokens} min={0} step={1_000_000} formatWithCommas onChange={setMonthlyOutputTokens} />
+              <NumberField id="hybrid-input-tokens" label="Input tokens per month" value={monthlyInputTokens} min={0} max={HYBRID_PLANNING_HORIZON_TOKENS} step={1_000_000} formatWithCommas onChange={setMonthlyInputTokens} />
+              <NumberField id="hybrid-output-tokens" label="Output tokens per month" value={monthlyOutputTokens} min={0} max={HYBRID_PLANNING_HORIZON_TOKENS} step={1_000_000} formatWithCommas onChange={setMonthlyOutputTokens} />
               <div className={styles.totalUsage}>
                 <span>Total monthly usage</span>
                 <strong>{compactNumber(facts.monthlyTokens)}</strong>
@@ -864,6 +898,12 @@ export default function HybridSavings() {
             <p className={styles.workloadExplanation}>
               The {selectedProfile.label.toLowerCase()} profile implies approximately <strong>{compactNumber(facts.monthlyRequests)} requests/month</strong>. Your entered token totals remain the hosted billing basis.
             </p>
+
+            {requestMixMismatch && (
+              <Alert title="Token mix differs from the average request" variant="info" isInline>
+                GPU sizing uses the higher request count implied by the input or output volume so no work is omitted. Align the monthly and average-request ratios for a tighter estimate.
+              </Alert>
+            )}
 
             <div className={styles.assumptionStrip}>
               <div><span>Workload shape</span><strong>{selectedProfile.label}</strong></div>
@@ -1048,8 +1088,14 @@ export default function HybridSavings() {
                 <Progress value={progress.total > 0 ? progress.completed / progress.total * 100 : 0} size="sm" aria-label="GPU sizing progress" />
               </div>
             )}
-            {invalidWorkload && <Alert title="Review the workload inputs" variant="warning" isInline>Token totals and performance targets must be positive; processing hours must be between 1 and {assumptions.hoursPerMonth}, and peak demand must be at least 1× average.</Alert>}
+            {invalidWorkload && <Alert title="Review the workload inputs" variant="warning" isInline>The combined monthly token total must be positive and no more than 1T, performance targets must be positive, processing hours must be between 1 and {assumptions.hoursPerMonth}, and peak demand must be at least 1× average.</Alert>}
             {!costings.isLoading && hostedModel === null && model && <Alert title="Hosted comparison unavailable" variant="warning" isInline>No exact hosted API price was found for this checkpoint in the selected pricing feed. The app does not silently substitute a base or differently quantized model.</Alert>}
+            {!costings.isLoading && costingInputsStale && (
+              <Alert title="Some pricing inputs are stale" variant="warning" isInline>
+                The comparison may use the last successfully collected prices
+                {staleCostingSources.length > 0 ? ` for ${staleCostingSources.join(', ')}` : ''}. Validate current rates before a purchasing decision.
+              </Alert>
+            )}
             {isStale && !isSizing && <Alert title="Inputs changed" variant="info" isInline>Refresh the forecast so AISimulators can size the updated workload.</Alert>}
             {sizingError && <Alert title="Comparison unavailable" variant="danger" isInline>{sizingError}</Alert>}
           </CardBody>
@@ -1071,11 +1117,11 @@ export default function HybridSavings() {
                     <ToggleGroupItem text="Full TCO" isSelected={assumptions.costLens === 'fully-loaded'} onChange={() => updateAssumption('costLens', 'fully-loaded')} />
                     <ToggleGroupItem text="Marginal" isSelected={assumptions.costLens === 'marginal'} onChange={() => updateAssumption('costLens', 'marginal')} />
                   </ToggleGroup>
-                  <small>{assumptions.costLens === 'fully-loaded' ? 'People, implementation and recurring costs included' : 'Usage-linked and recurring operating costs only'}</small>
+                  <small>{assumptions.costLens === 'fully-loaded' ? 'People, implementation and recurring costs included' : 'Operating costs only; acquisition and initial implementation are treated as already committed'}</small>
                 </div>
               </div>
               <p className={styles.comparisonFrame}>
-                <strong>Comparison basis:</strong> {hostedModel ? hostedProviderLabel(hostedModel.provider) : 'Hosted provider'} · {assumptions.costLens === 'fully-loaded' ? 'Full TCO' : 'Marginal cost'} · {billingModeLabel(assumptions.cloudBillingMode)} · {formatter.format(peakToAverage)}× peak · {formatter.format(assumptions.planningCapacityUsePct)}% planning capacity
+                <strong>Comparison basis:</strong> {hostedModel ? hostedProviderLabel(hostedModel.provider) : 'Hosted provider'} · {assumptions.costLens === 'fully-loaded' ? 'Full TCO' : 'Marginal cost'} · rented: {billingModeLabel(assumptions.cloudBillingMode)} · purchased power: full TDP for {formatter.format(assumptions.hoursPerMonth)} h/month · {formatter.format(peakToAverage)}× peak · {formatter.format(assumptions.planningCapacityUsePct)}% planning capacity · no failover reserve
               </p>
               <div className={styles.resultGrid}>
                 {comparison.options.map(option => (
@@ -1113,7 +1159,7 @@ export default function HybridSavings() {
                 <div className={styles.workloadStep}><span>Output usage</span><strong>{compactNumber(facts.monthlyOutputTokens)}</strong><small>tokens / month</small></div><b aria-hidden="true">→</b>
                 <div className={`${styles.workloadStep} ${styles.workloadStepTotal}`}><span>Billed usage</span><strong>{compactNumber(facts.monthlyTokens)}</strong><small>tokens / month</small></div>
               </div>
-              <p className={styles.workloadProfileNote}><strong>{selectedProfile.label} sizing:</strong> {compactNumber(facts.averageTokensPerRequest)} average tokens per request, {formatter.format(targetTpotMs)} ms maximum TPOT and {preciseRate(facts.peakRequestsPerSecond)} peak requests/second.</p>
+              <p className={styles.workloadProfileNote}><strong>{selectedProfile.label} sizing:</strong> {compactNumber(facts.averageTokensPerRequest)} average tokens per request, {formatter.format(targetTpotMs)} ms maximum TPOT and {preciseRate(facts.peakRequestsPerSecond)} peak requests/second. AISimulators measures serving capacity at {AISIMULATORS_CAPACITY_CONCURRENCY} concurrent requests while enforcing the latency targets.</p>
               <div className={styles.crossoverGrid}>
                 <div><span>Rented transition</span><strong>{comparison.rentedLowestCostTokens === null ? 'Not the lowest-cost option by 1T tokens/month' : `First becomes the lowest-cost option at ≈ ${compactNumber(comparison.rentedLowestCostTokens)} tokens/month`}</strong></div>
                 <div><span>Purchased transition</span><strong>{comparison.ownedLowestCostTokens === null ? 'Not the lowest-cost option by 1T tokens/month' : `First becomes the lowest-cost option at ≈ ${compactNumber(comparison.ownedLowestCostTokens)} tokens/month`}</strong></div>

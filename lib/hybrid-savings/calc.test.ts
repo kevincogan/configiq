@@ -88,6 +88,26 @@ describe('hybrid savings calculations', () => {
     expect(facts.peakRequestsPerSecond).toBeCloseTo(5_000 / (730 * 3_600))
   })
 
+  it('does not drop work when the monthly token mix differs from the average request', () => {
+    const mismatched: HybridWorkload = {
+      ...workload,
+      monthlyInputTokens: 800_000,
+      monthlyOutputTokens: 200_000,
+      averageInputTokens: 900,
+      averageOutputTokens: 100,
+      activeHoursPerMonth: 1,
+    }
+    const facts = workloadFacts(mismatched)
+
+    // Input implies 888.89 requests, while output implies 2,000. The larger
+    // count is required to avoid silently omitting output work.
+    expect(facts.monthlyRequests).toBeCloseTo(2_000)
+    // 100 output tok/s / 100 output tok/request = 1 request/s. At the
+    // workload mix, 2,000 requests carry 1M billed tokens, so one hour of
+    // capacity is 3,600 / 2,000 * 1M = 1.8M billed tokens.
+    expect(candidateCapacityTokens(mismatched, candidate)).toBeCloseTo(1_800_000)
+  })
+
   it('prices hosted input and output tokens independently', () => {
     const result = hostedCostAtVolume(workload, hostedPrice, assumptions, 25_000_000)
     expect(result.monthlyCost).toBe(35)
@@ -122,6 +142,14 @@ describe('hybrid savings calculations', () => {
   it('converts AISimulators output throughput into billed-token capacity', () => {
     const capacity = candidateCapacityTokens(workload, candidate)
     expect(capacity).toBe(100 * 5 * 730 * 3_600)
+  })
+
+  it('excludes incomplete AISimulators capacity instead of inventing a fallback rate', () => {
+    const incomplete = { ...candidate, clusterOutputTokensPerSecond: 0 }
+
+    expect(candidateCapacityTokens(workload, incomplete)).toBe(0)
+    expect(bestRentedAtVolume(workload, [incomplete], assumptions, 25_000_000)).toBeNull()
+    expect(bestOwnedAtVolume(workload, [incomplete], assumptions, 25_000_000)).toBeNull()
   })
 
   it('selects the least-cost eligible rented and owned candidates independently', () => {
@@ -199,6 +227,77 @@ describe('hybrid savings calculations', () => {
     expect(result?.candidate?.cloudGpusPerInstance).toBe(1)
   })
 
+  it('does not price Qwen3 8B rented capacity from single-user throughput', () => {
+    const planningWorkload: HybridWorkload = {
+      monthlyInputTokens: 2_000_000_000,
+      monthlyOutputTokens: 500_000_000,
+      averageInputTokens: 2_048,
+      averageOutputTokens: 512,
+      activeHoursPerMonth: 730,
+      peakToAverage: 1,
+    }
+    const qwenPrice: HostedPrice = {
+      modelId: 'Qwen/Qwen3-8B',
+      label: 'Qwen hosted API',
+      inputPerMillion: 0.117,
+      outputPerMillion: 0.455,
+    }
+    const a100CapacityCandidate: InfrastructureCandidate = {
+      ...candidate,
+      systemId: 'a100_sxm',
+      label: 'NVIDIA A100-SXM4-80GB',
+      // Live AISimulators result at the standardized concurrency-32 capacity
+      // load. Concurrency 1 returns only 74.63 tok/s and is a latency result,
+      // not the serving capacity used for infrastructure planning.
+      clusterOutputTokensPerSecond: 1_072.1655488481815,
+      cloudHourlyCostPerInstance: 2.7,
+      cloudRatePerGpuHour: 2.7,
+      cloudGpusPerInstance: 1,
+      cloudDirectInfrastructureMonthly: 500,
+      purchaseGpusPerServer: 1,
+      purchasePricePerReplica: 34_000,
+      purchaseInstallationPerReplica: 2_400,
+      tdpWattsPerGpu: 400,
+    }
+    const planningAssumptions: CostAssumptions = {
+      ...assumptions,
+      costLens: 'fully-loaded',
+      cloudBillingMode: 'scale-to-zero',
+      cloudRuntimeBufferPct: 10,
+      planningCapacityUsePct: 90,
+      analysisMonths: 36,
+      hardwareLifeYears: 4,
+      hardwareResidualPct: 20,
+      annualCostOfCapitalPct: 8,
+      annualMaintenancePct: 5,
+      loadedMonthlyCostPerFte: 18_000,
+      hostedOperationsFte: 0.05,
+      hostedImplementation: 15_000,
+      rentedOperationsFte: 0.2,
+      rentedImplementation: 40_000,
+      ownedOperationsFte: 0.25,
+      ownedImplementation: 50_000,
+      ownedDirectInfrastructureMonthly: 1_500,
+      ownedFacilityMonthlyPerServer: 200,
+      ownedBaseSystemPowerWattsPerServer: 450,
+    }
+
+    const result = calculateHybridComparison(
+      planningWorkload,
+      qwenPrice,
+      [a100CapacityCandidate],
+      planningAssumptions,
+    )
+    const hosted = result.options.find(option => option.key === 'hosted')
+    const rented = result.options.find(option => option.key === 'rented')
+    const owned = result.options.find(option => option.key === 'owned')
+
+    expect(hosted?.monthlyCost).toBeLessThan(rented?.monthlyCost ?? Infinity)
+    expect(rented?.monthlyCost).toBeLessThan(owned?.monthlyCost ?? Infinity)
+    expect(rented?.replicas).toBe(1)
+    expect(owned?.replicas).toBe(1)
+  })
+
   it('shares a whole instance only across replicas the workload actually needs', () => {
     const capacity = candidateCapacityTokens(workload, candidate)
     const result = bestRentedAtVolume(
@@ -216,6 +315,33 @@ describe('hybrid savings calculations', () => {
     const replicaHours = capacity * 8 * outputShare / 100 / 3_600
     expect(result?.replicas).toBe(8)
     expect(result?.monthlyCost).toBeCloseTo(replicaHours / 8 * 16)
+  })
+
+  it('does not treat burst peak replicas as continuously parallel scale-to-zero work', () => {
+    const burstWorkload = { ...workload, peakToAverage: 2 }
+    const packedCandidate = {
+      ...candidate,
+      cloudGpusPerInstance: 8,
+      cloudHourlyCostPerInstance: 16,
+    }
+    const capacity = candidateCapacityTokens(burstWorkload, packedCandidate)
+    const volume = capacity * 2
+    const result = bestRentedAtVolume(
+      burstWorkload,
+      [packedCandidate],
+      { ...assumptions, cloudBillingMode: 'scale-to-zero', cloudRuntimeBufferPct: 0 },
+      volume,
+    )
+    const outputShare = burstWorkload.monthlyOutputTokens /
+      (burstWorkload.monthlyInputTokens + burstWorkload.monthlyOutputTokens)
+    const replicaHours = volume * outputShare / 100 / 3_600
+
+    // Two replicas are needed at the 2x peak, but average demand uses only one
+    // replica. The whole instance therefore runs for the full 730-hour active
+    // window rather than receiving an impossible 2x full-month packing credit.
+    expect(result?.replicas).toBe(2)
+    expect(replicaHours).toBeCloseTo(730)
+    expect(result?.monthlyCost).toBeCloseTo(replicaHours * 16)
   })
 
   it('never lowers scale-to-zero rented cost when demand crosses replica boundaries', () => {
@@ -272,6 +398,11 @@ describe('hybrid savings calculations', () => {
     expect(eightReplicas?.billedGpuCount).toBe(8)
     expect(eightReplicas?.breakdown.find(item => item.label.includes('depreciation'))?.monthlyCost)
       .toBeCloseTo(oneReplica?.breakdown.find(item => item.label.includes('depreciation'))?.monthlyCost ?? 0)
+    const installedServerEnergy = 8 * 500 / 1_000 * 730 * 1.4 * 0.12
+    expect(oneReplica?.breakdown.find(item => item.label === 'Power including PUE')?.monthlyCost)
+      .toBeCloseTo(installedServerEnergy)
+    expect(eightReplicas?.breakdown.find(item => item.label === 'Power including PUE')?.monthlyCost)
+      .toBeCloseTo(installedServerEnergy)
   })
 
   it('rounds active-window rented capacity to a whole cloud instance', () => {
@@ -367,6 +498,38 @@ describe('hybrid savings calculations', () => {
     )
     expect(result.chartMaximumTokens).toBeGreaterThan(furthestRelevantPoint)
     expect(result.chartMaximumTokens).toBeLessThanOrEqual(furthestRelevantPoint * 2)
+  })
+
+  it('finds a narrow crossover after the eightieth capacity boundary', () => {
+    const tenBillionTokenStep = 10_000_000_000
+    const lateCandidate: InfrastructureCandidate = {
+      ...candidate,
+      clusterOutputTokensPerSecond:
+        tenBillionTokenStep /
+        ((workload.averageInputTokens + workload.averageOutputTokens) /
+          workload.averageOutputTokens * workload.activeHoursPerMonth * 3_600),
+      cloudRatePerGpuHour: 99 / 730,
+      cloudGpusPerInstance: 1,
+      cloudHourlyCostPerInstance: 99 / 730,
+      purchasePricePerReplica: null,
+    }
+    const lateAssumptions: CostAssumptions = {
+      ...assumptions,
+      cloudBillingMode: 'always-on',
+      rentedDirectInfrastructureMonthly: 80.5,
+    }
+    const result = calculateHybridComparison(
+      workload,
+      { ...hostedPrice, inputPerMillion: 0.01, outputPerMillion: 0.01 },
+      [lateCandidate],
+      lateAssumptions,
+    )
+
+    // At the end of step 80 the hosted cost is $8,000 and rented is
+    // $8,000.50. In step 81, rented is $8,099.50, so the exact first whole
+    // token where hosted reaches that amount is 809.95B tokens.
+    expect(result.rentedBreakEvenTokens).toBe(809_950_000_000)
+    expect(result.chartPoints.some(point => point.tokens === tenBillionTokenStep * 81)).toBe(true)
   })
 
   it('uses the same lowest-cost formulas for every plotted chart point', () => {

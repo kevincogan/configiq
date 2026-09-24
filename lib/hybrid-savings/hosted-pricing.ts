@@ -66,17 +66,12 @@ export function hostedPricingAliases(modelId: string): string[] {
   if (owner === 'stepfun-ai') add(`stepfun/${base}`)
   if (owner === 'sgl-project' && base.startsWith('deepseek-')) add(`deepseek/${base}`)
 
-  if (owner === 'google' && base === 'gemma-4-26b-a4b') {
-    add('google/gemma-4-26b-a4b-it')
-  }
-
   if (owner === 'meta-llama') {
-    if (!base.endsWith('-instruct')) add(`meta-llama/${base}-instruct`)
-    if (base.startsWith('meta-llama-3.1-')) {
-      add(`meta-llama/${base.replace(/^meta-/, '')}-instruct`)
-    }
-    if (slug(base) === 'meta-llama-3.1-405b') {
-      add('hyperbolic/meta-llama/meta-llama-3.1-405b-instruct')
+    // Provider feeds sometimes omit the redundant "Meta-" prefix, but a base
+    // model and its Instruct variant are different checkpoints. Only normalize
+    // the prefix when the selected checkpoint is already explicitly Instruct.
+    if (base.startsWith('meta-llama-3.1-') && base.endsWith('-instruct')) {
+      add(`meta-llama/${base.replace(/^meta-/, '')}`)
     }
     if (base.startsWith('llama-4-maverick-')) add('meta-llama/llama-4-maverick')
     if (base.startsWith('llama-4-scout-')) add('meta-llama/llama-4-scout')
@@ -91,9 +86,7 @@ export function hostedPricingAliases(modelId: string): string[] {
       add(`deepseek/${base === 'deepseek-v3.1' ? 'deepseek-chat-v3.1' : base}`)
     }
     if (base.startsWith('glm-')) add(`z-ai/${base}`)
-    if (base.startsWith('gemma-')) {
-      add(`google/${base === 'gemma-4-26b-a4b' ? `${base}-it` : base}`)
-    }
+    if (base.startsWith('gemma-')) add(`google/${base}`)
     if (base.startsWith('kimi-')) add(`moonshotai/${base}`)
     if (base.startsWith('llama-3.1-')) add(`meta-llama/${base}`)
     if (base.startsWith('minimax-')) add(`minimax/${base}`)

@@ -81,6 +81,27 @@ describe('hosted pricing resolution', () => {
     expect(result.matches).toHaveLength(1)
   })
 
+  it('does not silently use an instruction-tuned offer for a base checkpoint', () => {
+    const prices = [
+      pricedModel('meta-llama/llama-3.1-8b-instruct', 'Hosted provider', 0.1, 0.2),
+      pricedModel('hyperbolic/meta-llama/meta-llama-3.1-405b-instruct', 'Hosted provider', 0.2, 0.5),
+      pricedModel('google/gemma-4-26b-a4b-it', 'Hosted provider', 0.2, 0.4),
+    ]
+
+    expect(resolveHostedPricing(
+      'meta-llama/Meta-Llama-3.1-8B', prices, 1_000_000, 1_000_000,
+    ).selected).toBeNull()
+    expect(resolveHostedPricing(
+      'google/gemma-4-26b-a4b', prices, 1_000_000, 1_000_000,
+    ).selected).toBeNull()
+    expect(resolveHostedPricing(
+      'meta-llama/Meta-Llama-3.1-405B', prices, 1_000_000, 1_000_000,
+    ).selected).toBeNull()
+    expect(resolveHostedPricing(
+      'nvidia/gemma-4-26b-a4b', prices, 1_000_000, 1_000_000,
+    ).selected).toBeNull()
+  })
+
   it('resolves explicit serving-format and instruction aliases', () => {
     const prices = [
       pricedModel('meta-llama/llama-3.1-70b-instruct', 'Meta', 0.4, 0.4),
