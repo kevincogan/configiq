@@ -11,8 +11,8 @@ See docs/api/openapi.yaml for the full spec.
 import argparse
 import json
 import logging
-import re
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
