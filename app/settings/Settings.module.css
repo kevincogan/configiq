@@ -64,6 +64,26 @@
 /* ── Field layout ── */
 .fieldWrap { display: flex; flex-direction: column; gap: 6px; }
 
+.toggle :global(.pf-v6-c-switch) {
+  --pf-v6-c-switch--Height: 18px !important;
+  --pf-v6-c-switch__toggle--Width: 32px !important;
+  --pf-v6-c-switch__toggle--Height: 16px !important;
+  --pf-v6-c-switch__toggle--BorderRadius: 9px !important;
+  font-size: 11px !important;
+}
+.toggle :global(.pf-v6-c-switch__label) {
+  font-size: 11px !important;
+  font-weight: 500;
+}
+.toggle :global(.pf-v6-c-switch__toggle) {
+  width: 32px !important;
+  height: 16px !important;
+}
+.toggle :global(.pf-v6-c-switch__toggle::before) {
+  width: 12px !important;
+  height: 12px !important;
+}
+
 .fieldLabel {
   font-family: var(--mono);
   font-size: 12px;
