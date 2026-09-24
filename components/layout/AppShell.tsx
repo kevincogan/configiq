@@ -43,8 +43,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <Masthead display={{ default: 'inline' }} style={{ backgroundColor: "#1a1a1a", borderBottom: "1px solid #2d2d2d" }}>
       <MastheadMain>
         <MastheadToggle>
-          <PageToggleButton variant="plain" aria-label="Navigation" id="nav-toggle">
-            <BarsIcon color="white" />
+          <PageToggleButton
+            variant="plain"
+            aria-label="Navigation"
+            id="nav-toggle"
+            style={{ width: 44, height: 44, padding: 8 }}
+          >
+            <BarsIcon color="white" style={{ width: 24, height: 24 }} />
           </PageToggleButton>
         </MastheadToggle>
         <MastheadBrand>
