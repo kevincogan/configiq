@@ -904,6 +904,10 @@ def make_mock_estimate_result():
 
 class TestEstimate:
 
+    def test_gpu_memory_default_matches_backend(self):
+        assert app_module._backend_memory_fraction("vllm") == pytest.approx(0.9)
+        assert app_module._backend_memory_fraction("sglang") == pytest.approx(0.88)
+
     @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_success(self, mock_estimate):
         mock_estimate.return_value = make_mock_estimate_result()
@@ -957,6 +961,21 @@ class TestEstimate:
         assert request.tp_size == 2
         assert request.batch_size == 128
         assert include == set()
+
+    @patch("tools.api_service.app._run_aisimulate_prediction")
+    def test_passes_gpu_memory_utilization_to_sdk(self, mock_estimate):
+        mock_estimate.return_value = make_mock_estimate_result()
+        body = {**VALID_ESTIMATE_BODY, "gpu_memory_utilization": 0.97}
+        client.post("/estimate", json=body)
+        request, _ = mock_estimate.call_args.args
+        assert request.gpu_memory_utilization == pytest.approx(0.97)
+
+    def test_prediction_config_uses_gpu_memory_utilization(self):
+        body = {**VALID_ESTIMATE_BODY, "gpu_memory_utilization": 0.97}
+        request = app_module.EstimateRequest.model_validate(body)
+        config = app_module._aisimulate_prediction_config(request)
+
+        assert config.engine.workers.aggregated.kv_cache.capacity.memory_fraction == pytest.approx(0.97)
 
     @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_disagg_mode(self, mock_estimate):

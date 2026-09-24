@@ -31,7 +31,7 @@ export async function GET() {
   const timeoutSeconds = gatewayTimeoutSeconds(DEFAULT_TIMEOUT_SECONDS)
 
   try {
-    const [systemsRes, modelsRes] = await Promise.all([
+    const [systemsRes, modelsRes, backendsResult] = await Promise.all([
       fetch(`${baseUrl}/systems?include=specs`, {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
@@ -42,6 +42,11 @@ export async function GET() {
         cache: 'no-store',
         signal: AbortSignal.timeout(timeoutSeconds * 1000),
       }),
+      fetch(`${baseUrl}/backends`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(timeoutSeconds * 1000),
+      }).then(response => ({ response })).catch(() => ({ response: null })),
     ])
 
     if (!systemsRes.ok || !modelsRes.ok) {
@@ -59,6 +64,7 @@ export async function GET() {
 
     let systemsData: { systems?: unknown[] }
     let modelsData: { models?: unknown[] }
+    let backendsData: { backends?: unknown[] } = {}
     try {
       systemsData = await systemsRes.json()
       modelsData = await modelsRes.json()
@@ -68,11 +74,19 @@ export async function GET() {
         { status: 502, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
       )
     }
+    if (backendsResult.response?.ok) {
+      try {
+        backendsData = await backendsResult.response.json()
+      } catch {
+        backendsData = {}
+      }
+    }
 
     return NextResponse.json(
       {
         systems: systemsData.systems ?? [],
         models: modelsData.models ?? [],
+        backends: backendsData.backends ?? [],
         // Effective AISimulators request timeout (recommend/estimate), for the loader hint.
         timeoutSeconds: gatewayTimeoutSeconds(),
       },

@@ -24,11 +24,14 @@ export interface EstimateAdapterInput {
   system: string
   isl: number
   osl: number
+  max_seq_len?: number
+  prefill_max_seq_len?: number
+  decode_max_seq_len?: number
   batch_size: number
   tp_size: number
   pp_size?: number
-  vram_gb?: number | null
   gpu_memory_utilization?: number
+  vram_gb?: number | null
   backend?: string
   backend_version?: string
   hf_model_config?: Record<string, unknown> | null
@@ -110,7 +113,12 @@ export async function fetchEstimateAsInferenceResult(
     tp_size: input.tp_size,
   }
 
+  if (input.max_seq_len != null) body.max_seq_len = input.max_seq_len
+  if (input.prefill_max_seq_len != null) body.prefill_max_seq_len = input.prefill_max_seq_len
+  if (input.decode_max_seq_len != null) body.decode_max_seq_len = input.decode_max_seq_len
+
   if (input.pp_size != null && input.pp_size > 1) body.pp_size = input.pp_size
+  if (input.gpu_memory_utilization != null) body.gpu_memory_utilization = input.gpu_memory_utilization
   if (input.backend_version) body.backend_version = input.backend_version
   if (input.prefix != null && input.prefix > 0) body.prefix = input.prefix
   if (input.kvcache_quant_mode) body.kvcache_quant_mode = input.kvcache_quant_mode

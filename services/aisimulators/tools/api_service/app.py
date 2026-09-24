@@ -11,6 +11,7 @@ See docs/api/openapi.yaml for the full spec.
 import argparse
 import json
 import logging
+import re
 import os
 import sys
 import tempfile
@@ -25,10 +26,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel, Field, model_validator
 
+from aisimulate_core.sdk.backends.factory import get_backend
 from aisimulate_core.sdk.common import get_default_models
 from aisimulate_core.sdk.errors import NoFeasibleConfigError
 from aisimulate_core.sdk.memory import estimate_kv_cache
-from aisimulate_core.sdk.perf_database import load_system_spec
+from aisimulate_core.sdk.perf_database import get_supported_databases, load_system_spec
 from aisimulate_core.sdk.utils import get_model_config_from_model_path
 
 # Optional observability + MCP, provided by the shared configiq package
@@ -112,6 +114,9 @@ class EstimateRequest(BaseModel):
     max_seq_len: int | None = Field(default=None, gt=0, description="Maximum sequence length for KV cache allocation.")
     prefill_max_seq_len: int | None = Field(default=None, gt=0, description="Prefill worker sequence-length override.")
     decode_max_seq_len: int | None = Field(default=None, gt=0, description="Decode worker sequence-length override.")
+    gpu_memory_utilization: float | None = Field(default=None, gt=0, le=1, description="GPU memory fraction for KV-cache capacity.")
+    prefill_gpu_memory_utilization: float | None = Field(default=None, gt=0, le=1)
+    decode_gpu_memory_utilization: float | None = Field(default=None, gt=0, le=1)
     tp_size: int = Field(default=1, description="Tensor parallel size.")
     pp_size: int = Field(default=1, description="Pipeline parallel size.")
     batch_size: int = Field(default=128, description="Batch size (max concurrent requests).")
@@ -172,6 +177,9 @@ class ServingConfig(BaseModel):
     enable_chunked_prefill: bool
     enable_prefix_caching: bool
     quantization: str
+    memory_fraction: float | None = None
+    memory_fraction_kind: str | None = None
+    runtime_memory_field: str | None = None
 
 
 class WorkerConfig(BaseModel):
@@ -346,6 +354,38 @@ _SM_ARCHITECTURE = {
 
 _DEFAULT_GPU_MEMORY_UTILIZATION = 0.9
 _DEFAULT_MAX_CANDIDATE_GPUS = 1024
+_BACKEND_PUBLIC_IDS = {"vllm": "vllm", "sglang": "sglang", "trtllm": "tensorrt-llm"}
+_BACKEND_SDK_IDS = {public: sdk for sdk, public in _BACKEND_PUBLIC_IDS.items()}
+
+
+def _sdk_backend_id(backend: str) -> str:
+    return _BACKEND_SDK_IDS.get(backend, backend)
+
+
+def _backend_memory_fraction(backend: str, backend_version: str | None = None) -> float:
+    from aisimulate_core.sdk.backends.factory import get_backend
+
+    value = get_backend(_sdk_backend_id(backend)).get_default_free_gpu_memory_fraction(backend_version)
+    return value if value is not None else _DEFAULT_GPU_MEMORY_UTILIZATION
+
+
+def _backend_memory_fraction_kind(backend: str) -> str:
+    from aisimulate_core.sdk.backends.factory import get_backend
+
+    return "of_free" if get_backend(_sdk_backend_id(backend)).memory_fraction_of_free() else "of_total"
+
+
+def _backend_runtime_memory_field(backend: str) -> str:
+    return {
+        "vllm": "gpu_memory_utilization",
+        "sglang": "mem_fraction_static",
+        "trtllm": "free_gpu_memory_fraction",
+        "tensorrt-llm": "free_gpu_memory_fraction",
+    }.get(backend, "memory_fraction")
+
+
+def _version_sort_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", version))
 
 
 class _noop_context:
@@ -483,7 +523,7 @@ def _aisimulate_recommendation_config(
         "engine": {
             "model": model_path or req.model_path,
             "hardware": req.system,
-            "backend": req.backend,
+            "backend": _sdk_backend_id(req.backend),
             "backend_version": req.backend_version,
             "database_mode": req.database_mode,
             "context_length": context_length,
@@ -549,6 +589,15 @@ def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
             },
             "scheduler": {"max_sequences": batch or req.batch_size},
         }
+        memory_fraction = req.gpu_memory_utilization
+        if role == "prefill" and req.prefill_gpu_memory_utilization is not None:
+            memory_fraction = req.prefill_gpu_memory_utilization
+        elif role == "decode" and req.decode_gpu_memory_utilization is not None:
+            memory_fraction = req.decode_gpu_memory_utilization
+        if memory_fraction is not None:
+            result["kv_cache"] = {
+                "capacity": {"type": "default", "memory_fraction": memory_fraction},
+            }
         if role != "agg":
             result["context_length"] = context
         return result
@@ -567,7 +616,7 @@ def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
             "mode": mode,
             "model": req.model_path,
             "hardware": req.system,
-            "backend": req.backend,
+            "backend": _sdk_backend_id(req.backend),
             "backend_version": req.backend_version,
             "database_mode": req.database_mode,
             "context_length": req.max_seq_len or req.isl + req.osl,
@@ -747,6 +796,8 @@ def _build_serving_config(
     gemm: str | None,
     prefix: int = 0,
     max_seq_len: int | None = None,
+    gpu_memory_utilization: float | None = None,
+    backend_version: str | None = None,
 ) -> ServingConfig:
     quant_map = {"fp8": "fp8", "fp8_block": "fp8", "int8": "int8"}
     quantization = quant_map.get(gemm or "", "auto")
@@ -755,10 +806,13 @@ def _build_serving_config(
         tensor_parallel_size=tp,
         max_model_len=max_seq_len or isl + osl,
         max_num_seqs=min(concurrency, 256),
-        gpu_memory_utilization=_DEFAULT_GPU_MEMORY_UTILIZATION,
+        gpu_memory_utilization=gpu_memory_utilization or _backend_memory_fraction(backend, backend_version),
         enable_chunked_prefill=isl >= 4096 or concurrency >= 64,
         enable_prefix_caching=prefix > 0,
         quantization=quantization,
+        memory_fraction=gpu_memory_utilization or _backend_memory_fraction(backend, backend_version),
+        memory_fraction_kind=_backend_memory_fraction_kind(backend),
+        runtime_memory_field=_backend_runtime_memory_field(backend),
     )
 
 
@@ -777,17 +831,18 @@ def _build_memory_breakdown(
     moe_tp: int | None = None,
     moe_ep: int | None = None,
     max_seq_len: int | None = None,
+    memory_fraction: float | None = None,
 ) -> MemoryBreakdown | None:
     try:
         raw = estimate_kv_cache(
             model_path=model_path,
             system=system,
-            backend=backend,
+            backend=_sdk_backend_id(backend),
             backend_version=backend_version,
             max_num_tokens=max_seq_len or isl + osl,
             max_batch_size=concurrency,
-            memory_fraction_kind="of_total",
-            memory_fraction_value=_DEFAULT_GPU_MEMORY_UTILIZATION,
+            memory_fraction_kind=_backend_memory_fraction_kind(backend),
+            memory_fraction_value=memory_fraction or _backend_memory_fraction(backend, backend_version),
             tp_size=tp,
             pp_size=pp,
             moe_tp_size=moe_tp,
@@ -879,6 +934,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.get("/backends")
+def get_backends():
+    """Return backend/version support and effective memory defaults."""
+    supported = get_supported_databases()
+    backend_data: dict[str, dict[str, Any]] = {}
+    for system, systems_backends in supported.items():
+        for sdk_id, versions in systems_backends.items():
+            public_id = _BACKEND_PUBLIC_IDS.get(sdk_id, sdk_id)
+            entry = backend_data.setdefault(public_id, {
+                "id": public_id,
+                "aisimulate_id": sdk_id,
+                "versions": set(),
+                "systems": {},
+            })
+            entry["versions"].update(versions)
+            entry["systems"][system] = sorted(versions)
+
+    result = []
+    for public_id, entry in sorted(backend_data.items()):
+        backend = get_backend(entry["aisimulate_id"])
+        versions = sorted(entry["versions"], key=_version_sort_key)
+        result.append({
+            "id": public_id,
+            "aisimulate_id": entry["aisimulate_id"],
+            "versions": versions,
+            "default_version": versions[-1] if versions else None,
+            "memory_fraction": backend.get_default_free_gpu_memory_fraction(versions[-1] if versions else None),
+            "memory_fraction_kind": "of_free" if backend.memory_fraction_of_free() else "of_total",
+            "runtime_field": {
+                "vllm": "gpu_memory_utilization",
+                "sglang": "mem_fraction_static",
+                "trtllm": "free_gpu_memory_fraction",
+            }.get(entry["aisimulate_id"]),
+            "systems": entry["systems"],
+        })
+    return {"backends": result}
+
 # Expose the API as MCP tools if the optional extra is present.
 if _MCP:
     mcp_support.mount(app, name="aisimulators",
@@ -946,7 +1039,7 @@ def post_recommend(
                 cfg.serving_config = _build_serving_config(
                     req.backend, cfg.tp or 1, req.isl, req.osl,
                     cfg.bs or req.target_concurrency or 1, cfg.gemm, req.prefix,
-                    max_seq_len=req.max_seq_len,
+                    max_seq_len=req.max_seq_len, backend_version=cfg.backend_version,
                 )
             if "memory" in includes:
                 cfg.memory_breakdown = _build_memory_breakdown(
@@ -1057,6 +1150,8 @@ def post_estimate(
                             gemm_q, kv_q, worker.moe_tp, worker.moe_ep,
                             max_seq_len=(req.prefill_max_seq_len if worker is resp.prefill_config else req.decode_max_seq_len)
                             or req.max_seq_len,
+                            memory_fraction=(req.prefill_gpu_memory_utilization if worker is resp.prefill_config else req.decode_gpu_memory_utilization)
+                            or req.gpu_memory_utilization,
                         )
         return resp
 
@@ -1064,6 +1159,7 @@ def post_estimate(
         resp.serving_config = _build_serving_config(
             resp.backend or req.backend, req.tp_size, req.isl, req.osl,
             req.batch_size, resp.gemm, 0, max_seq_len=req.max_seq_len,
+            gpu_memory_utilization=req.gpu_memory_utilization, backend_version=req.backend_version,
         )
 
     if "memory" in includes:
@@ -1074,6 +1170,7 @@ def post_estimate(
                 req.gemm_quant_mode if req.gemm_quant_mode and req.gemm_quant_mode != "half" else None,
                 req.kvcache_quant_mode if req.kvcache_quant_mode and req.kvcache_quant_mode != "half" else None,
                 req.moe_tp_size, req.moe_ep_size, max_seq_len=req.max_seq_len,
+                memory_fraction=req.gpu_memory_utilization,
             )
 
     return resp
@@ -1087,7 +1184,7 @@ def post_memory(req: MemoryRequest):
             raw = estimate_kv_cache(
                 model_path=effective_path,
                 system=req.system,
-                backend=req.backend,
+                backend=_sdk_backend_id(req.backend),
                 backend_version=req.backend_version,
                 max_num_tokens=req.max_num_tokens,
                 max_batch_size=req.max_batch_size,
