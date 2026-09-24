@@ -53,7 +53,7 @@ app/                    # Next.js App Router pages
   settings/             # App settings
   api/                  # Next.js API routes — proxy to AISimulators REST API
     recommend/          # POST — GPU sizing
-    estimate/           # POST — GPU performance
+    predict/            # POST — GPU performance
     memory/             # POST — memory breakdown
     gpus/               # GET — GPU catalog + optional live pricing
     hf-config/          # GET — Hugging Face model config lookup

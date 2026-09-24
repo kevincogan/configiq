@@ -12,7 +12,7 @@ import { NextResponse } from 'next/server'
 import { gatewayTimeoutSeconds } from '@/lib/api/timeout'
 
 // This is the catalog fetch's own timeout (30s). The value surfaced to the
-// client below is gatewayTimeoutSeconds() — the longer recommend/estimate timeout.
+  // client below is gatewayTimeoutSeconds() — the longer recommend/predict timeout.
 const DEFAULT_TIMEOUT_SECONDS = 30
 
 export async function GET() {
@@ -87,7 +87,7 @@ export async function GET() {
         systems: systemsData.systems ?? [],
         models: modelsData.models ?? [],
         backends: backendsData.backends ?? [],
-        // Effective AISimulators request timeout (recommend/estimate), for the loader hint.
+        // Effective AISimulators request timeout (recommend/predict), for the loader hint.
         timeoutSeconds: gatewayTimeoutSeconds(),
       },
       {

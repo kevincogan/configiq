@@ -62,7 +62,7 @@ describe('fetchEstimateAsInferenceResult - request body construction', () => {
     const url = call[0] as string
     const body = JSON.parse(call[1].body as string)
 
-    expect(url).toContain('/api/estimate')
+    expect(url).toContain('/api/predict')
     expect(body).toHaveProperty('model_path', 'meta-llama/Llama-3.1-8B-Instruct')
     expect(body).toHaveProperty('system', 'h200_sxm')
     expect(body).toHaveProperty('backend', 'vllm')

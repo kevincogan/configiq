@@ -1,8 +1,8 @@
 /**
- * Adapter that calls the AISimulators /estimate API and converts the response
+ * Adapter that calls the AISimulators /predict API and converts the response
  * into the InferenceConfigResult shape used by the Predict performance page.
  *
- * Unlike the recommend adapter, /estimate takes explicit TP/PP/batch_size
+ * Unlike the recommend adapter, /predict takes explicit TP/PP/batch_size
  * and returns TTFT/TPOT for that specific configuration. The caller is
  * responsible for choosing the parallelism; this adapter does not search
  * for an optimal config.
@@ -133,7 +133,7 @@ export async function fetchEstimateAsInferenceResult(
     body.model_config = input.hf_model_config
   }
 
-  // Disagg: send per-pool parallelism. The backend runs cli_estimate in
+  // Disagg: send per-pool parallelism. The backend runs predict in
   // mode='disagg' and returns prefill_config / decode_config.
   if (input.mode === 'disagg' && input.prefill && input.decode) {
     body.mode = 'disagg'
@@ -158,7 +158,7 @@ export async function fetchEstimateAsInferenceResult(
   }
 
   const startTime = performance.now()
-  const res = await fetch('/api/estimate?include=config,memory', {
+  const res = await fetch('/api/predict?include=config,memory', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -169,7 +169,7 @@ export async function fetchEstimateAsInferenceResult(
 
   if (!res.ok || data?.status === 'failed') {
     const code = (data?.error as Record<string, unknown>)?.code as string ?? 'AISIM_NO_CONFIGURATION'
-    const message = (data?.error as Record<string, unknown>)?.message as string ?? data?.detail as string ?? 'AISimulators estimate failed'
+    const message = (data?.error as Record<string, unknown>)?.message as string ?? data?.detail as string ?? 'AISimulators prediction failed'
     throw new EstimateError(code, message)
   }
 
@@ -224,7 +224,7 @@ export async function fetchEstimateAsInferenceResult(
     warnings.push('Disaggregated mode was requested but the backend returned an aggregated estimate.')
   }
   if (!hasTiming) {
-    warnings.push('Timing metrics (TTFT, TPOT) missing or non-finite; performance estimates unavailable.')
+    warnings.push('Timing metrics (TTFT, TPOT) missing or non-finite; performance prediction unavailable.')
   }
   const requestLatency = hasTiming ? ttft + tpot * input.osl : 0
   const throughput = hasTiming && input.osl > 0 && requestLatency > 0 ? (input.osl * 1000) / requestLatency : 0
@@ -244,7 +244,7 @@ export async function fetchEstimateAsInferenceResult(
       kv_cache_used_gb: kvCacheGb,
       max_sequences_from_memory: maxNumSeqs,
       kv_category: 'AISimulators',
-      kv_category_label: 'AISimulators estimate',
+      kv_category_label: 'AISimulators prediction',
     },
     vllm_config: {
       tensor_parallel_size: sc?.tensor_parallel_size ?? tp,

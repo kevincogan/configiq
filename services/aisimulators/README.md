@@ -14,7 +14,8 @@ the `aisimulate` and `aisimulate_core` APIs used by this service.
 | Method | Path | Description |
 |---|---|---|
 | POST | `/recommend` | GPU sizing recommendations |
-| POST | `/estimate` | Single-point performance estimate |
+| POST | `/predict` | Single-point performance prediction |
+| POST | `/estimate` | Deprecated alias for `/predict` |
 | POST | `/memory` | Memory / KV-cache breakdown |
 | GET | `/models` | Supported models |
 | GET | `/systems` | Supported GPU systems |

@@ -1076,12 +1076,11 @@ def post_recommend(
     return RecommendResponse(configs=configs, chosen_mode=chosen_mode)
 
 
-@app.post("/estimate")
-def post_estimate(
+def post_predict(
     req: EstimateRequest,
     include: str | None = Query(default=None, examples=["config,memory"], description="Comma-separated extras: config, memory."),
 ):
-    """Single-point performance estimate for a given parallelism configuration.
+    """Single-point performance prediction for a given parallelism configuration.
 
     Given a model, GPU system, backend, and explicit parallelism settings
     (TP/PP/batch_size), returns predicted TTFT, TPOT, throughput, and memory.
@@ -1201,6 +1200,10 @@ def post_estimate(
             )
 
     return resp
+
+
+app.post("/predict", response_model=EstimateResponse)(post_predict)
+app.post("/estimate", response_model=EstimateResponse, deprecated=True)(post_predict)
 
 
 @app.post("/memory", response_model=MemoryResponse)

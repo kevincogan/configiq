@@ -32,8 +32,11 @@ curl -X POST http://localhost:8000/recommend \
   }'
 ```
 
-### POST `/estimate`
-Estimate performance for a specific GPU configuration.
+### POST `/predict`
+Predict performance for a specific GPU configuration.
+
+### POST `/estimate` (deprecated)
+Compatibility alias for `/predict`.
 
 ### POST `/memory`
 Estimate KV cache memory usage.
@@ -60,10 +63,11 @@ When `fastapi-mcp` is installed, the server automatically exposes:
 `fastapi-mcp` automatically exposes all REST API endpoints as MCP tools:
 
 1. **POST `/recommend`** - Find optimal GPU count and parallelism for serving an LLM
-2. **POST `/estimate`** - Estimate throughput/latency for a specific GPU configuration  
-3. **POST `/memory`** - Estimate KV cache memory usage
-4. **GET `/models`** - Get all supported model architectures
-5. **GET `/systems`** - Get all supported GPU systems
+2. **POST `/predict`** - Predict throughput/latency for a specific GPU configuration
+3. **POST `/estimate`** - Deprecated compatibility alias for `/predict`
+4. **POST `/memory`** - Estimate KV cache memory usage
+5. **GET `/models`** - Get all supported model architectures
+6. **GET `/systems`** - Get all supported GPU systems
 
 Tools are automatically generated from the OpenAPI schema with full parameter validation.
 

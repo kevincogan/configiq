@@ -733,7 +733,7 @@ export default function Performance() {
     setTimeout(() => setShowToast(false), 5000);
   };
 
-  // Build the /api/estimate request body from current form state and GPU-specific values
+  // Build the /api/predict request body from current form state and GPU-specific values
   const buildEstimateRequestBody = React.useCallback(() => {
     const spec = modelSpecs.get(model);
     const isMoe = detectMoe(spec, hfConfig);
@@ -2292,7 +2292,7 @@ export default function Performance() {
         duration={debugDuration}
         open={debugOpen}
         onToggle={setDebugOpen}
-        endpoint="POST /api/estimate"
+        endpoint="POST /api/predict"
       />
     </div>
   );

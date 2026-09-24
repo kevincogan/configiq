@@ -904,6 +904,18 @@ def make_mock_estimate_result():
 
 class TestEstimate:
 
+    @patch("tools.api_service.app._run_aisimulate_prediction")
+    def test_predict_endpoint(self, mock_estimate):
+        mock_estimate.return_value = make_mock_estimate_result()
+        resp = client.post("/predict", json=VALID_ESTIMATE_BODY)
+
+        assert resp.status_code == 200
+        assert resp.json()["ttft"] == pytest.approx(471.378)
+
+    def test_estimate_is_marked_deprecated(self):
+        schema = client.get("/openapi.json").json()
+        assert schema["paths"]["/estimate"]["post"]["deprecated"] is True
+
     def test_gpu_memory_default_matches_backend(self):
         assert app_module._backend_memory_fraction("vllm") == pytest.approx(0.92)
         assert app_module._backend_memory_fraction("sglang") == pytest.approx(0.88)
