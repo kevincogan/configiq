@@ -84,7 +84,7 @@
   transform: translateY(-50%);
   pointer-events: none;
 }
-.autoChipWrapper :global(.pf-v5-c-label) {
+.autoChipWrapper :global(.pf-v6-c-label) {
   font-size: 12px;
   font-weight: 500;
 }

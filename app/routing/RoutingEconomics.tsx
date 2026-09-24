@@ -384,8 +384,7 @@ export default function RoutingEconomics() {
           <div className={styles.modeToggle}>
             <Switch
               id="cost-mode"
-              label="Cloud"
-              labelOff="Owned"
+              label={mode === 'cloud' ? 'Cloud' : 'Owned'}
               isChecked={mode === 'cloud'}
               onChange={(_e, checked) => setMode(checked ? 'cloud' : 'owned')}
             />

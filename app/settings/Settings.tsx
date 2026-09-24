@@ -319,8 +319,7 @@ export function Settings() {
             <div className={styles.fieldWrap} id="costings-settings-panel">
               <Switch
                 id="settings-costings-enabled"
-                label="Enabled"
-                labelOff="Disabled"
+                label={costingsEnabled ? 'Enabled' : 'Disabled'}
                 isChecked={costingsEnabled}
                 onChange={(_e, checked) => {
                   setCostingsEnabled(checked);

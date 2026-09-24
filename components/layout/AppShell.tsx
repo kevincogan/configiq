@@ -145,13 +145,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       }}
     >
       <PageSidebarBody>
-        <Nav theme="dark" aria-label="Main navigation" style={{
-          '--pf-v5-c-nav__link--after--BorderColor': 'transparent',
-          '--pf-v5-c-nav__link--after--BorderWidth': '0'
+        <Nav aria-label="Main navigation" style={{
+          '--pf-v6-c-nav__link--after--BorderColor': 'transparent',
+          '--pf-v6-c-nav__link--after--BorderWidth': '0'
         } as React.CSSProperties}>
           <NavList style={{
-            '--pf-v5-c-nav__item--after--BorderColor': 'transparent',
-            '--pf-v5-c-nav__item--after--BorderWidth': '0'
+            '--pf-v6-c-nav__item--after--BorderColor': 'transparent',
+            '--pf-v6-c-nav__item--after--BorderWidth': '0'
           } as React.CSSProperties}>
             <NavItemWithIcon
               icon={HomeIcon}
@@ -265,7 +265,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <Page
-      header={masthead}
+      masthead={masthead}
       sidebar={sidebar}
       isManagedSidebar
       defaultManagedSidebarIsOpen={true}

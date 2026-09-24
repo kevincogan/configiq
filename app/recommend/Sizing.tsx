@@ -581,11 +581,10 @@ export default function Sizing() {
                       ? expanded.filter(e => e !== 'context-window')
                       : [...expanded, 'context-window']
                   )}
-                  isExpanded={expanded.includes('context-window')}
                 >
                   <span style={{ fontWeight: 600 }}>Context window sizing</span>
                 </AccordionToggle>
-                <AccordionContent isHidden={!expanded.includes('context-window')}>
+                <AccordionContent hidden={!expanded.includes('context-window')}>
                   <div style={{ paddingTop: 12 }}>
                     <div className={styles.paramGrid} style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
                       <div>
@@ -885,11 +884,10 @@ export default function Sizing() {
                   onClick={() => setExpanded(
                     expanded.includes('perf') ? expanded.filter(e => e !== 'perf') : [...expanded, 'perf']
                   )}
-                  isExpanded={expanded.includes('perf')}
                 >
                   <span style={{ fontWeight: 600 }}>Estimated serving performance</span>
                 </AccordionToggle>
-                <AccordionContent isHidden={!expanded.includes('perf')}>
+                <AccordionContent hidden={!expanded.includes('perf')}>
                   <div className={styles.cardBody}>
                     <div className={styles.paramGrid}>
                       <div>

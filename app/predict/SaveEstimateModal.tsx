@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Modal, Button, TextInput, FormGroup } from '@patternfly/react-core';
+import { Modal, ModalFooter, ModalHeader, Button, TextInput, FormGroup } from '@patternfly/react-core';
 
 interface SaveEstimateModalProps {
   isOpen: boolean;
@@ -30,45 +30,43 @@ export function SaveEstimateModal({ isOpen, onClose, onSave, defaultName }: Save
 
   return (
     <Modal
-      title="Save estimate"
       isOpen={isOpen}
       onClose={onClose}
-      actions={[
-        <Button key="save" variant="primary" onClick={handleSave}>
-          Save estimate
-        </Button>,
-        <Button key="cancel" variant="link" onClick={onClose}>
-          Cancel
-        </Button>,
-      ]}
       variant="small"
     >
-      <FormGroup label="Name" isRequired>
-        <TextInput
-          value={name}
-          onChange={(_, val) => setName(val)}
-          placeholder="e.g. Llama 3.1 8B · H200 · 97 users"
-          style={{ fontFamily: 'var(--font-sans)', fontSize: '14px' }}
-        />
-      </FormGroup>
+      <ModalHeader title="Save estimate" />
+      <div>
+        <FormGroup label="Name" isRequired>
+          <TextInput
+            value={name}
+            onChange={(_, val) => setName(val)}
+            placeholder="e.g. Llama 3.1 8B · H200 · 97 users"
+            style={{ fontFamily: 'var(--font-sans)', fontSize: '14px' }}
+          />
+        </FormGroup>
 
-      <FormGroup label="Tags (optional)" style={{ marginTop: '16px' }}>
-        <TextInput
-          value={tags}
-          onChange={(_, val) => setTags(val)}
-          placeholder="e.g. production, dev, Q3 planning"
-          style={{ fontFamily: 'var(--font-sans)', fontSize: '14px' }}
-        />
-      </FormGroup>
+        <FormGroup label="Tags (optional)" style={{ marginTop: '16px' }}>
+          <TextInput
+            value={tags}
+            onChange={(_, val) => setTags(val)}
+            placeholder="e.g. production, dev, Q3 planning"
+            style={{ fontFamily: 'var(--font-sans)', fontSize: '14px' }}
+          />
+        </FormGroup>
 
-      <FormGroup label="Notes (optional)" style={{ marginTop: '16px' }}>
-        <TextInput
-          value={notes}
-          onChange={(_, val) => setNotes(val)}
-          placeholder="e.g. baseline for CIO deck"
-          style={{ fontFamily: 'var(--font-sans)', fontSize: '14px' }}
-        />
-      </FormGroup>
+        <FormGroup label="Notes (optional)" style={{ marginTop: '16px' }}>
+          <TextInput
+            value={notes}
+            onChange={(_, val) => setNotes(val)}
+            placeholder="e.g. baseline for CIO deck"
+            style={{ fontFamily: 'var(--font-sans)', fontSize: '14px' }}
+          />
+        </FormGroup>
+      </div>
+      <ModalFooter>
+        <Button variant="primary" onClick={handleSave}>Save estimate</Button>
+        <Button variant="link" onClick={onClose}>Cancel</Button>
+      </ModalFooter>
     </Modal>
   );
 }

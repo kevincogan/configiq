@@ -118,7 +118,7 @@
   transform: translateY(-50%);
   pointer-events: none;
 }
-.autoChipWrapper :global(.pf-v5-c-label) {
+.autoChipWrapper :global(.pf-v6-c-label) {
   font-size: 12px;
   font-weight: 500;
 }
@@ -154,11 +154,11 @@
   gap: 12px;
   flex-wrap: wrap;
 }
-.hfToggleRow :global(.pf-v5-c-switch) {
+.hfToggleRow :global(.pf-v6-c-switch) {
   display: flex;
   align-items: center;
 }
-.hfToggleRow :global(.pf-v5-c-switch__label) {
+.hfToggleRow :global(.pf-v6-c-switch__label) {
   font-size: 14px;
   font-weight: 500;
   color: #151515;
@@ -181,7 +181,7 @@
   align-items: stretch;
   gap: 8px;
 }
-.hfPanel :global(.pf-v5-c-button) {
+.hfPanel :global(.pf-v6-c-button) {
   height: auto;
   align-self: stretch;
 }
@@ -543,10 +543,10 @@
 .footerSpacer { flex: 1; }
 
 /* ---------- input field overrides ---------- */
-.inputCard :global(.pf-v5-c-form-control),
-.inputCard :global(.pf-v5-c-select__toggle),
-.inputCard :global(.pf-v5-c-form-control__wrapper),
-.hfPanel :global(.pf-v5-c-form-control) {
+.inputCard :global(.pf-v6-c-form-control),
+.inputCard :global(.pf-v6-c-select__toggle),
+.inputCard :global(.pf-v6-c-form-control__wrapper),
+.hfPanel :global(.pf-v6-c-form-control) {
   border: 1px solid var(--line2) !important;
   border-radius: 4px !important;
   padding: 7px 11px !important;
@@ -561,24 +561,24 @@
   user-select: text !important;
 }
 
-.inputCard :global(.pf-v5-c-form-control:focus),
-.inputCard :global(.pf-v5-c-select__toggle:focus) {
+.inputCard :global(.pf-v6-c-form-control:focus),
+.inputCard :global(.pf-v6-c-select__toggle:focus) {
   border: 2px solid var(--blue) !important;
   outline: none !important;
   box-shadow: none !important;
 }
 
-.inputCard :global(.pf-v5-c-form-select) {
+.inputCard :global(.pf-v6-c-form-select) {
   height: 42px !important;
 }
 
-.inputCard :global(.pf-v5-c-form-select) :global(.pf-v5-c-form-select__toggle) {
+.inputCard :global(.pf-v6-c-form-select) :global(.pf-v6-c-form-select__toggle) {
   height: 42px !important;
   min-height: 42px !important;
 }
 
-.inputCard :global(.pf-v5-c-form-control::after),
-.inputCard :global(.pf-v5-c-form-control::before) {
+.inputCard :global(.pf-v6-c-form-control::after),
+.inputCard :global(.pf-v6-c-form-control::before) {
   display: none !important;
 }
 
