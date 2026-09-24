@@ -930,6 +930,33 @@ class TestEstimate:
         assert sc is not None
         assert sc["tensor_parallel_size"] == 2
 
+    @patch("tools.api_service.app._run_aisimulate_prediction")
+    def test_include_config_preserves_serving_controls(self, mock_estimate):
+        mock_estimate.return_value = make_mock_estimate_result()
+        body = {
+            **VALID_ESTIMATE_BODY,
+            "prefix": 512,
+            "max_num_seqs": 64,
+            "enable_chunked_prefill": True,
+            "gpu_memory_utilization": 0.97,
+        }
+        resp = client.post("/estimate?include=config", json=body)
+
+        assert resp.status_code == 200
+        assert resp.json()["serving_config"] == {
+            "backend": "vllm",
+            "tensor_parallel_size": 2,
+            "max_model_len": 5000,
+            "max_num_seqs": 64,
+            "gpu_memory_utilization": 0.97,
+            "enable_chunked_prefill": True,
+            "enable_prefix_caching": True,
+            "quantization": "auto",
+            "memory_fraction": 0.97,
+            "memory_fraction_kind": "of_total",
+            "runtime_memory_field": "gpu_memory_utilization",
+        }
+
     @patch("tools.api_service.app.estimate_kv_cache")
     @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_include_memory(self, mock_estimate, mock_kv):
