@@ -49,6 +49,18 @@ describe('readRecommendStream', () => {
     )
   })
 
+  it('accepts the normalized JSON response returned by a ConfigIQ proxy', async () => {
+    const result = {
+      requestId: 'size_123',
+      status: 'completed',
+      mode: 'agg',
+      recommendation: { gpusNeeded: 1 },
+    }
+    const response = Response.json(result)
+
+    await expect(readRecommendStream(response)).resolves.toMatchObject(result)
+  })
+
   it('surfaces a JSON API error before attempting to parse events', async () => {
     const response = new Response(JSON.stringify({ detail: 'Invalid workload' }), {
       status: 400,

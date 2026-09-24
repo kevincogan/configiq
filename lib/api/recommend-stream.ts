@@ -20,6 +20,22 @@ export async function readRecommendStream(
     } catch { /* retain the HTTP error */ }
     throw new Error(message)
   }
+
+  // A direct AISimulators request streams progress, while a request proxied
+  // through another ConfigIQ deployment returns its already-normalized JSON
+  // response. Support both contracts so the proxy path does not fail while
+  // trying to parse JSON as server-sent events.
+  if (response.headers.get('content-type')?.includes('application/json')) {
+    const body: unknown = await response.json()
+    if (
+      body && typeof body === 'object' &&
+      ((body as RecommendResponse).status === 'completed' || (body as RecommendResponse).status === 'failed')
+    ) {
+      return body as RecommendResponse
+    }
+    throw new Error('Recommendation API returned an invalid JSON response')
+  }
+
   if (!response.body) throw new Error('Recommendation stream unavailable')
 
   const reader = response.body.getReader()
