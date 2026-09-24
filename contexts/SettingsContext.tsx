@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { loadAppConfig, getAppConfig } from '@/lib/app-config';
+import { loadAppConfig } from '@/lib/app-config';
 
 export type InferenceBackend = 'vllm' | 'tensorrt-llm' | 'sglang';
 // A hosted-model pricing feed. 'merged' is the one constant the API always
@@ -88,7 +88,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       setInferenceBackendState(activeBackend);
 
       const savedVersion = localStorage.getItem(STORAGE_KEYS.backendVersion);
-      setBackendVersionState(savedVersion !== null ? savedVersion : (config.backendVersions[activeBackend] ?? ''));
+      setBackendVersionState(savedVersion ?? '');
 
       const savedCostings = localStorage.getItem(STORAGE_KEYS.costingsEnabled);
       setCostingsEnabledState(savedCostings === 'true');
@@ -125,10 +125,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const setInferenceBackend = React.useCallback((v: InferenceBackend) => {
     setInferenceBackendState(v);
     localStorage.setItem(STORAGE_KEYS.inferenceBackend, v);
-    // Reset version to config default for the new backend
-    const defaultVersion = getAppConfig().backendVersions[v] ?? '';
-    setBackendVersionState(defaultVersion);
-    localStorage.setItem(STORAGE_KEYS.backendVersion, defaultVersion);
+    // Settings resolves the backend's default version from the live catalog.
+    setBackendVersionState('');
+    localStorage.setItem(STORAGE_KEYS.backendVersion, '');
   }, []);
 
   const setBackendVersion = React.useCallback((v: string) => {

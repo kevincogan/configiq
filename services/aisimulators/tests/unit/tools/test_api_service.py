@@ -363,6 +363,14 @@ class TestRecommend:
         assert "bad input" in resp.json()["detail"]
 
     @patch("tools.api_service.app._run_aisimulate_recommendation")
+    def test_no_viable_parallel_config_returns_422(self, mock_recommend):
+        mock_recommend.side_effect = RuntimeError(
+            "NoViableParallelConfig: no deployment_mode has a viable parallel config"
+        )
+        resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
+        assert resp.status_code == 422
+
+    @patch("tools.api_service.app._run_aisimulate_recommendation")
     def test_unexpected_error_returns_500(self, mock_recommend):
         mock_recommend.side_effect = RuntimeError("internal failure")
         resp = client.post("/recommend", json=VALID_RECOMMEND_BODY)
@@ -897,6 +905,22 @@ def make_mock_estimate_result():
 class TestEstimate:
 
     @patch("tools.api_service.app._run_aisimulate_prediction")
+    def test_predict_endpoint(self, mock_estimate):
+        mock_estimate.return_value = make_mock_estimate_result()
+        resp = client.post("/predict", json=VALID_ESTIMATE_BODY)
+
+        assert resp.status_code == 200
+        assert resp.json()["ttft"] == pytest.approx(471.378)
+
+    def test_estimate_is_marked_deprecated(self):
+        schema = client.get("/openapi.json").json()
+        assert schema["paths"]["/estimate"]["post"]["deprecated"] is True
+
+    def test_gpu_memory_default_matches_backend(self):
+        assert app_module._backend_memory_fraction("vllm") == pytest.approx(0.92)
+        assert app_module._backend_memory_fraction("sglang") == pytest.approx(0.88)
+
+    @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_success(self, mock_estimate):
         mock_estimate.return_value = make_mock_estimate_result()
         resp = client.post("/estimate", json=VALID_ESTIMATE_BODY)
@@ -917,6 +941,33 @@ class TestEstimate:
         sc = resp.json()["serving_config"]
         assert sc is not None
         assert sc["tensor_parallel_size"] == 2
+
+    @patch("tools.api_service.app._run_aisimulate_prediction")
+    def test_include_config_preserves_serving_controls(self, mock_estimate):
+        mock_estimate.return_value = make_mock_estimate_result()
+        body = {
+            **VALID_ESTIMATE_BODY,
+            "prefix": 512,
+            "max_num_seqs": 64,
+            "enable_chunked_prefill": True,
+            "gpu_memory_utilization": 0.97,
+        }
+        resp = client.post("/estimate?include=config", json=body)
+
+        assert resp.status_code == 200
+        assert resp.json()["serving_config"] == {
+            "backend": "vllm",
+            "tensor_parallel_size": 2,
+            "max_model_len": 5000,
+            "max_num_seqs": 64,
+            "gpu_memory_utilization": 0.97,
+            "enable_chunked_prefill": True,
+            "enable_prefix_caching": True,
+            "quantization": "auto",
+            "memory_fraction": 0.97,
+            "memory_fraction_kind": "of_total",
+            "runtime_memory_field": "gpu_memory_utilization",
+        }
 
     @patch("tools.api_service.app.estimate_kv_cache")
     @patch("tools.api_service.app._run_aisimulate_prediction")
@@ -949,6 +1000,39 @@ class TestEstimate:
         assert request.tp_size == 2
         assert request.batch_size == 128
         assert include == set()
+
+    @patch("tools.api_service.app._run_aisimulate_prediction")
+    def test_passes_gpu_memory_utilization_to_sdk(self, mock_estimate):
+        mock_estimate.return_value = make_mock_estimate_result()
+        body = {**VALID_ESTIMATE_BODY, "gpu_memory_utilization": 0.97}
+        client.post("/estimate", json=body)
+        request, _ = mock_estimate.call_args.args
+        assert request.gpu_memory_utilization == pytest.approx(0.97)
+
+    def test_prediction_config_uses_gpu_memory_utilization(self):
+        body = {**VALID_ESTIMATE_BODY, "gpu_memory_utilization": 0.97}
+        request = app_module.EstimateRequest.model_validate(body)
+        config = app_module._aisimulate_prediction_config(request)
+
+        assert config.engine.workers.aggregated.kv_cache.capacity.memory_fraction == pytest.approx(0.97)
+
+    def test_prediction_config_uses_serving_controls(self):
+        body = {
+            **VALID_ESTIMATE_BODY,
+            "prefix": 512,
+            "max_num_seqs": 64,
+            "enable_chunked_prefill": True,
+            "gemm_quant_mode": "fp8",
+            "kvcache_quant_mode": "fp8",
+        }
+        request = app_module.EstimateRequest.model_validate(body)
+        config = app_module._aisimulate_prediction_config(request)
+
+        assert config.traffic.source.cached_prefix_tokens == 512
+        assert config.engine.workers.aggregated.scheduler.max_sequences == 64
+        assert config.engine.enable_chunked_prefill is True
+        assert config.engine.gemm_quant_mode == "fp8"
+        assert config.engine.kvcache_quant_mode == "fp8"
 
     @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_disagg_mode(self, mock_estimate):

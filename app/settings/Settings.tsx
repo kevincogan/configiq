@@ -12,11 +12,11 @@ import styles from './Settings.module.css';
 
 type ModelStatus = 'idle' | 'supported' | 'catalog' | 'fetching' | 'fetched' | 'error';
 
-const BACKENDS: { value: InferenceBackend; label: string; description: string }[] = [
-  { value: 'vllm', label: 'vLLM', description: 'Open-source LLM inference engine; default for most deployments.' },
-  { value: 'tensorrt-llm', label: 'TensorRT-LLM', description: "NVIDIA's optimized inference library for maximum GPU throughput." },
-  { value: 'sglang', label: 'SGLang', description: 'Structured generation serving framework with fast batch processing.' },
-];
+const BACKEND_LABELS: Record<string, string> = {
+  vllm: 'vLLM',
+  'tensorrt-llm': 'TensorRT-LLM',
+  sglang: 'SGLang',
+};
 
 export function Settings() {
   const {
@@ -24,7 +24,7 @@ export function Settings() {
     inferenceBackend, setInferenceBackend, backendVersion, setBackendVersion,
     costingsEnabled, setCostingsEnabled,
   } = useSettings();
-  const { modelOptions, isLoading: catalogLoading } = useCatalog();
+  const { modelOptions, backendOptions, isLoading: catalogLoading } = useCatalog();
 
   const [localModel, setLocalModel] = React.useState('');
   const [modelStatus, setModelStatus] = React.useState<ModelStatus>('idle');
@@ -35,6 +35,7 @@ export function Settings() {
   const [costingsSaved, setCostingsSaved] = React.useState(false);
   const [costingsOpen, setCostingsOpen] = React.useState(false);
   const [validatedOpen, setValidatedOpen] = React.useState(false);
+  const backendDefaultAttempted = React.useRef(false);
 
   // Sync local model input once context has loaded from localStorage
   const modelSynced = React.useRef(false);
@@ -72,6 +73,14 @@ export function Settings() {
     return () => clearTimeout(timer);
   }, [localModel, hfToken, modelOptions, catalogLoading, hydrated]);
 
+  React.useEffect(() => {
+    if (hydrated && backendOptions.length > 0 && !backendDefaultAttempted.current) {
+      backendDefaultAttempted.current = true;
+      const defaultVersion = backendOptions.find(b => b.id === inferenceBackend)?.defaultVersion;
+      if (!backendVersion && defaultVersion) setBackendVersion(defaultVersion);
+    }
+  }, [hydrated, backendOptions, inferenceBackend, backendVersion, setBackendVersion]);
+
   const handleTokenChange = (v: string) => {
     setHfToken(v);
     if (v.startsWith('hf_')) {
@@ -82,6 +91,8 @@ export function Settings() {
 
   const handleBackendChange = (v: InferenceBackend) => {
     setInferenceBackend(v); // also resets backendVersion to the default for v
+    const defaultVersion = backendOptions.find(b => b.id === v)?.defaultVersion;
+    setBackendVersion(defaultVersion ?? '');
     setBackendSaved(true);
     setTimeout(() => setBackendSaved(false), 3000);
   };
@@ -92,7 +103,7 @@ export function Settings() {
     setTimeout(() => setBackendSaved(false), 3000);
   };
 
-  const selectedBackend = BACKENDS.find(b => b.value === inferenceBackend);
+  const selectedBackend = backendOptions.find(b => b.id === inferenceBackend);
 
   return (
     <div className={styles.page}>
@@ -253,8 +264,8 @@ export function Settings() {
                   onChange={e => handleBackendChange(e.target.value as InferenceBackend)}
                   className={styles.selectInput}
                 >
-                  {BACKENDS.map(b => (
-                    <option key={b.value} value={b.value}>{b.label}</option>
+                  {backendOptions.map(b => (
+                    <option key={b.id} value={b.id}>{BACKEND_LABELS[b.id] ?? b.id}</option>
                   ))}
                 </select>
               </div>
@@ -266,14 +277,18 @@ export function Settings() {
                   value={backendVersion}
                   onChange={e => handleVersionChange(e.target.value)}
                   className={styles.textInput}
-                  placeholder={getAppConfig().backendVersions[inferenceBackend] ?? ''}
+                  placeholder={selectedBackend?.defaultVersion ?? ''}
                   spellCheck={false}
                   autoComplete="off"
                 />
               </div>
             </div>
             {selectedBackend && (
-              <div className={styles.helperText}>{selectedBackend.description}</div>
+              <div className={styles.helperText}>
+                {selectedBackend.versions.length > 0
+                  ? `Supported versions: ${selectedBackend.versions.join(', ')}`
+                  : 'No versions reported by AISimulators'}
+              </div>
             )}
           </div>
         </div>
@@ -302,17 +317,18 @@ export function Settings() {
           </button>
           {costingsOpen && (
             <div className={styles.fieldWrap} id="costings-settings-panel">
-              <Switch
-                id="settings-costings-enabled"
-                label="Enabled"
-                labelOff="Disabled"
-                isChecked={costingsEnabled}
-                onChange={(_e, checked) => {
-                  setCostingsEnabled(checked);
-                  setCostingsSaved(true);
-                  setTimeout(() => setCostingsSaved(false), 2000);
-                }}
-              />
+              <div className={styles.toggle}>
+                <Switch
+                  id="settings-costings-enabled"
+                  label={costingsEnabled ? 'Enabled' : 'Disabled'}
+                  isChecked={costingsEnabled}
+                  onChange={(_e, checked) => {
+                    setCostingsEnabled(checked);
+                    setCostingsSaved(true);
+                    setTimeout(() => setCostingsSaved(false), 2000);
+                  }}
+                />
+              </div>
               {costingsEnabled && (
                 <>
                 </>

@@ -12,7 +12,7 @@ import { NextResponse } from 'next/server'
 import { gatewayTimeoutSeconds } from '@/lib/api/timeout'
 
 // This is the catalog fetch's own timeout (30s). The value surfaced to the
-// client below is gatewayTimeoutSeconds() — the longer recommend/estimate timeout.
+// client below is gatewayTimeoutSeconds() — the longer recommend/predict timeout.
 const DEFAULT_TIMEOUT_SECONDS = 30
 
 export async function GET() {
@@ -34,7 +34,8 @@ export async function GET() {
     // A shared ConfigIQ deployment can expose the same AISimulators service
     // through its combined same-origin /api/catalog proxy. This is useful for
     // local consumers when the standalone service hostname is being migrated.
-    // Direct service deployments continue to use /systems + /models below.
+    // Direct service deployments continue to use /systems, /models, and
+    // /backends below.
     const combinedCatalogUrl = /\/api\/?$/.test(baseUrl)
       ? `${baseUrl.replace(/\/$/, '')}/catalog`
       : null
@@ -56,7 +57,7 @@ export async function GET() {
           { status: 502, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
         )
       }
-      let catalogData: { systems?: unknown[]; models?: unknown[] }
+      let catalogData: { systems?: unknown[]; models?: unknown[]; backends?: unknown[] }
       try {
         catalogData = await catalogRes.json()
       } catch {
@@ -69,6 +70,7 @@ export async function GET() {
         {
           systems: catalogData.systems ?? [],
           models: catalogData.models ?? [],
+          backends: catalogData.backends ?? [],
           timeoutSeconds: gatewayTimeoutSeconds(),
         },
         {
@@ -82,7 +84,7 @@ export async function GET() {
       )
     }
 
-    const [systemsRes, modelsRes] = await Promise.all([
+    const [systemsRes, modelsRes, backendsResult] = await Promise.all([
       fetch(`${baseUrl}/systems?include=specs`, {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
@@ -93,6 +95,11 @@ export async function GET() {
         cache: 'no-store',
         signal: AbortSignal.timeout(timeoutSeconds * 1000),
       }),
+      fetch(`${baseUrl}/backends`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(timeoutSeconds * 1000),
+      }).then(response => ({ response })).catch(() => ({ response: null })),
     ])
 
     if (!systemsRes.ok || !modelsRes.ok) {
@@ -110,6 +117,7 @@ export async function GET() {
 
     let systemsData: { systems?: unknown[] }
     let modelsData: { models?: unknown[] }
+    let backendsData: { backends?: unknown[] } = {}
     try {
       systemsData = await systemsRes.json()
       modelsData = await modelsRes.json()
@@ -119,12 +127,20 @@ export async function GET() {
         { status: 502, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
       )
     }
+    if (backendsResult.response?.ok) {
+      try {
+        backendsData = await backendsResult.response.json()
+      } catch {
+        backendsData = {}
+      }
+    }
 
     return NextResponse.json(
       {
         systems: systemsData.systems ?? [],
         models: modelsData.models ?? [],
-        // Effective AISimulators request timeout (recommend/estimate), for the loader hint.
+        backends: backendsData.backends ?? [],
+        // Effective AISimulators request timeout (recommend/predict), for the loader hint.
         timeoutSeconds: gatewayTimeoutSeconds(),
       },
       {

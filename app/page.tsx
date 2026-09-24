@@ -2,8 +2,7 @@
 import {
   PageSection,
   Title,
-  Text,
-  TextContent,
+  Content,
   Grid,
   GridItem,
   Card,
@@ -70,22 +69,22 @@ const tools = [
 export default function HomePage() {
   return (
     <>
-      <PageSection variant="light">
+      <PageSection>
         <div>
-          <TextContent>
-            <Title headingLevel="h1" size="2xl">
-              ConfigIQ
-            </Title>
-            <Text component="p">
+          <Title headingLevel="h1" size="2xl">
+            ConfigIQ
+          </Title>
+          <Content>
+            <Content component="p">
               LLM inference sizing, GPU comparison, and cost modeling for
               engineers and infrastructure teams.
-            </Text>
-            <Text component="small" style={{ fontStyle: "italic" }}>
+            </Content>
+            <Content component="small" style={{ fontStyle: "italic" }}>
               A free community service, provided as-is without warranty. All
               results are best-effort estimates for planning, not guarantees of
               real-world performance.
-            </Text>
-          </TextContent>
+            </Content>
+          </Content>
         </div>
       </PageSection>
 
@@ -99,9 +98,9 @@ export default function HomePage() {
                   {tool.title}
                 </CardTitle>
                 <CardBody>
-                  <TextContent>
-                    <Text component="p">{tool.description}</Text>
-                  </TextContent>
+                  <Content>
+                    <Content component="p">{tool.description}</Content>
+                  </Content>
                   <br />
                   <Button
                     variant="link"

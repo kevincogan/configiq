@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { handlePredict } from '@/lib/api/predict-proxy'
 
 export async function POST(req: NextRequest) {
-  return handlePredict(req, true)
+  return handlePredict(req)
 }
 
 export async function OPTIONS() {

@@ -375,7 +375,7 @@
   font-size: 13px;
   color: var(--t2);
 }
-.modeToggle :global(.pf-v5-c-switch__label) {
+.modeToggle :global(.pf-v6-c-switch__label) {
   font-size: 13px;
   color: var(--t2);
 }

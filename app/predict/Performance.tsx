@@ -130,7 +130,7 @@ export default function Performance() {
   console.log('Performance component mounting');
   const { hydrated, hfToken, defaultModel: settingsDefaultModel, inferenceBackend, backendVersion, costingsEnabled, preferredCloudProvider, pricingSource } = useSettings();
   const costings = useCostings(costingsEnabled, pricingSource);
-  const { gpuOptions: catalogGpus, modelOptions: catalogModels, modelSpecs, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
+  const { gpuOptions: catalogGpus, modelOptions: catalogModels, modelSpecs, backendOptions, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
 
   const [model, setModel] = React.useState('');
   const [gpu, setGpu] = React.useState(() => getAppConfig().defaultSystem);
@@ -214,15 +214,18 @@ export default function Performance() {
   const assumptionsRef = React.useRef<HTMLDivElement>(null);
 
   // Manual override states
-  const [parallelismOverride, setParallelismOverride] = React.useState(false);
-  const [parallelismManualTP, setParallelismManualTP] = React.useState<number | null>(null);
-  const [parallelismManualReplicas, setParallelismManualReplicas] = React.useState<number | null>(null);
   const [vllmOverride, setVllmOverride] = React.useState(false);
   const [vllmManualMaxNumSeqs, setVllmManualMaxNumSeqs] = React.useState<number | null>(null);
-  const [vllmManualMaxModelLen, setVllmManualMaxModelLen] = React.useState<number | null>(null);
   const [vllmManualChunkedPrefill, setVllmManualChunkedPrefill] = React.useState<boolean | null>(null);
-  const [vllmManualPrefixCaching, setVllmManualPrefixCaching] = React.useState<boolean | null>(null);
-  const [vllmManualGpuUtil, setVllmManualGpuUtil] = React.useState<number | null>(null);
+  const [servingPolicyOverride, setServingPolicyOverride] = React.useState(false);
+  const [servingManualContextLimit, setServingManualContextLimit] = React.useState<number | null>(null);
+  const [memoryOverride, setMemoryOverride] = React.useState(false);
+  const [gpuMemoryUtilization, setGpuMemoryUtilization] = React.useState<number | null>(null);
+
+  const effectiveGpuMemoryUtilization = gpuMemoryUtilization
+    ?? testResult?.vllm_config.gpu_memory_utilization
+    ?? backendOptions?.find(backend => backend.id === inferenceBackend)?.memoryFraction
+    ?? null;
 
   // Save estimate modal
   const [showSaveModal, setShowSaveModal] = React.useState(false);
@@ -234,8 +237,14 @@ export default function Performance() {
   const [testConcurrentUsers, setTestConcurrentUsers] = React.useState(1);
   const [testISL, setTestISL] = React.useState(2048);
   const [testOSL, setTestOSL] = React.useState(128);
+  const [maxSeqLen, setMaxSeqLen] = React.useState<number | null>(null);
+  const [prefillMaxSeqLen, setPrefillMaxSeqLen] = React.useState<number | null>(null);
+  const [decodeMaxSeqLen, setDecodeMaxSeqLen] = React.useState<number | null>(null);
   const [testPrefix, setTestPrefix] = React.useState(0);
   const [testTpSize, setTestTpSize] = React.useState(1);
+  const effectiveContextLimit = servingPolicyOverride && servingManualContextLimit !== null
+    ? servingManualContextLimit
+    : maxSeqLen;
   const [calcTrigger, setCalcTrigger] = React.useState(0);
   const [elapsed, setElapsed] = React.useState(0);
   const [testWeightPrecision, setTestWeightPrecision] = React.useState<'FP16' | 'FP8' | 'INT8' | 'INT4' | 'MXFP4' | 'NVFP4'>('FP16');
@@ -252,6 +261,9 @@ export default function Performance() {
 
   const [islInput, setIslInput] = React.useState('2048');
   const [oslInput, setOslInput] = React.useState('128');
+  const [maxSeqLenInput, setMaxSeqLenInput] = React.useState('');
+  const [prefillMaxSeqLenInput, setPrefillMaxSeqLenInput] = React.useState('');
+  const [decodeMaxSeqLenInput, setDecodeMaxSeqLenInput] = React.useState('');
   const [concurrentUsersInput, setConcurrentUsersInput] = React.useState('1');
   const [prefixInput, setPrefixInput] = React.useState('0');
   const [tpSizeInput, setTpSizeInput] = React.useState('1');
@@ -264,6 +276,9 @@ export default function Performance() {
   const invalidUsers = concurrentUsersInput === '' || parseInt(concurrentUsersInput, 10) < 1;
   const invalidTpSize = tpSizeInput === '' || parseInt(tpSizeInput, 10) < 1;
   const invalidPpSize = ppSizeInput === '' || parseInt(ppSizeInput, 10) < 1;
+  const invalidMaxSeqLen = maxSeqLenInput !== '' && parseInt(maxSeqLenInput, 10) < 1;
+  const invalidPrefillMaxSeqLen = prefillMaxSeqLenInput !== '' && parseInt(prefillMaxSeqLenInput, 10) < 1;
+  const invalidDecodeMaxSeqLen = decodeMaxSeqLenInput !== '' && parseInt(decodeMaxSeqLenInput, 10) < 1;
 
   const handleIslChange = (raw: string) => {
     const digits = raw.replace(/[^0-9]/g, '');
@@ -277,6 +292,17 @@ export default function Performance() {
     setOslInput(digits);
     const n = parseInt(digits, 10);
     if (!isNaN(n) && n >= 1) setTestOSL(n);
+  };
+
+  const handleSequenceLengthChange = (
+    raw: string,
+    setInput: (value: string) => void,
+    setValue: (value: number | null) => void,
+  ) => {
+    const digits = raw.replace(/[^0-9]/g, '');
+    setInput(digits);
+    const value = parseInt(digits, 10);
+    setValue(Number.isInteger(value) && value > 0 ? value : null);
   };
 
   const handleConcurrentUsersChange = (raw: string) => {
@@ -417,11 +443,16 @@ export default function Performance() {
           osl: testOSL,
           batch_size: testConcurrentUsers,
           tp_size: testTpSize,
+          ...(effectiveContextLimit != null ? { max_seq_len: effectiveContextLimit } : {}),
+          ...(prefillMaxSeqLen != null ? { prefill_max_seq_len: prefillMaxSeqLen } : {}),
+          ...(decodeMaxSeqLen != null ? { decode_max_seq_len: decodeMaxSeqLen } : {}),
+          ...(gpuMemoryUtilization != null ? { gpu_memory_utilization: gpuMemoryUtilization } : {}),
+          ...(vllmOverride && vllmManualMaxNumSeqs != null ? { max_num_seqs: vllmManualMaxNumSeqs } : {}),
+          ...(vllmOverride && vllmManualChunkedPrefill != null ? { enable_chunked_prefill: vllmManualChunkedPrefill } : {}),
           pp_size: testPpSize,
           backend: inferenceBackend,
           prefix: testPrefix > 0 ? testPrefix : undefined,
           vram_gb: currentCatalogGpu?.vramGb ?? null,
-          gpu_memory_utilization: currentCatalogGpu?.gpuMemoryUtilization,
           backend_version: backendVersion || undefined,
           hf_model_config: needsHfConfig(model, catalogModels) ? (hfConfig as Record<string, unknown> | null) : null,
           kvcache_quant_mode: testKVCachePrecision === 'FP8' ? 'fp8' :
@@ -501,16 +532,14 @@ export default function Performance() {
 
   // Reset overrides when major inputs change (model or GPU selection)
   React.useEffect(() => {
-    if (parallelismOverride || vllmOverride) {
-      setParallelismOverride(false);
-      setParallelismManualTP(null);
-      setParallelismManualReplicas(null);
+    if (vllmOverride || servingPolicyOverride || memoryOverride) {
       setVllmOverride(false);
       setVllmManualMaxNumSeqs(null);
-      setVllmManualMaxModelLen(null);
       setVllmManualChunkedPrefill(null);
-      setVllmManualPrefixCaching(null);
-      setVllmManualGpuUtil(null);
+      setServingPolicyOverride(false);
+      setServingManualContextLimit(null);
+      setMemoryOverride(false);
+      setGpuMemoryUtilization(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, gpu]);
@@ -704,7 +733,7 @@ export default function Performance() {
     setTimeout(() => setShowToast(false), 5000);
   };
 
-  // Build the /api/estimate request body from current form state and GPU-specific values
+  // Build the /api/predict request body from current form state and GPU-specific values
   const buildEstimateRequestBody = React.useCallback(() => {
     const spec = modelSpecs.get(model);
     const isMoe = detectMoe(spec, hfConfig);
@@ -715,11 +744,16 @@ export default function Performance() {
       backend: inferenceBackend,
       isl: testISL,
       osl: testOSL,
+      ...(effectiveContextLimit != null && { max_seq_len: effectiveContextLimit }),
+      ...(prefillMaxSeqLen != null && { prefill_max_seq_len: prefillMaxSeqLen }),
+      ...(decodeMaxSeqLen != null && { decode_max_seq_len: decodeMaxSeqLen }),
+      ...(gpuMemoryUtilization != null && { gpu_memory_utilization: gpuMemoryUtilization }),
+      ...(vllmOverride && vllmManualMaxNumSeqs != null && { max_num_seqs: vllmManualMaxNumSeqs }),
+      ...(vllmOverride && vllmManualChunkedPrefill != null && { enable_chunked_prefill: vllmManualChunkedPrefill }),
       batch_size: testConcurrentUsers,
       tp_size: testResult?.memory_analysis.tp_size ?? testTpSize,
       pp_size: testResult?.parallelism_strategy.pp_size ?? testPpSize,
       vram_gb: currentCatalogGpu?.vramGb ?? null,
-      gpu_memory_utilization: currentCatalogGpu?.gpuMemoryUtilization,
       ...(testPrefix > 0 && { prefix: testPrefix }),
       ...(backendVersion && { backend_version: backendVersion }),
       ...(testWeightPrecision === 'FP8' && { gemm_quant_mode: 'fp8' }),
@@ -747,7 +781,7 @@ export default function Performance() {
         decode_batch_size: parsePerfPhase(decodeCfg).batch,
       })
     };
-  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize]);
+  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, effectiveContextLimit, prefillMaxSeqLen, decodeMaxSeqLen, gpuMemoryUtilization, vllmOverride, vllmManualMaxNumSeqs, vllmManualChunkedPrefill, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize]);
 
   // Copy API request body to clipboard
   const handleCopyAPIRequest = async () => {
@@ -780,6 +814,7 @@ export default function Performance() {
     const quantFlag = (testWeightPrecision === 'INT4' || testWeightPrecision === 'INT8' || testWeightPrecision === 'MXFP4' || testWeightPrecision === 'NVFP4')
       ? ` \\\n  --quantization ${quantValue}`
       : '';
+    const cliMemoryFraction = (effectiveGpuMemoryUtilization ?? 0.9).toFixed(3);
 
     let cliCommand: string;
     if (isDisagg) {
@@ -790,7 +825,7 @@ export default function Performance() {
         return `# ${role} pool — ${ph.workers} worker(s), TP${ph.tp_size}${ph.pp_size > 1 ? ` PP${ph.pp_size}` : ''}, batch ${ph.batch_size}\n` +
           `vllm serve ${model} \\\n` +
           `  --tensor-parallel-size ${ph.tp_size}${ppFlag} \\\n` +
-          `  --gpu-memory-utilization 0.90 \\\n` +
+          `  --gpu-memory-utilization ${cliMemoryFraction} \\\n` +
           `  --dtype ${dtypeValue}${quantFlag} \\\n` +
           `  --kv-cache-dtype ${testKVCachePrecision.toLowerCase()}`;
       };
@@ -807,7 +842,7 @@ export default function Performance() {
       cliCommand = `vllm serve ${model} \\
   --tensor-parallel-size ${testResult.memory_analysis.tp_size}${ppFlag} \\
   --max-model-len auto \\
-  --gpu-memory-utilization 0.90 \\
+  --gpu-memory-utilization ${cliMemoryFraction} \\
   --dtype ${dtypeValue}${quantFlag} \\
   --kv-cache-dtype ${testKVCachePrecision.toLowerCase()} \\
   --max-num-seqs ${testResult.vllm_config?.max_num_seqs || 256}${testResult.vllm_config?.enable_chunked_prefill ? ' \\\n  --enable-chunked-prefill' : ''}`;
@@ -871,30 +906,14 @@ export default function Performance() {
   const getValidationWarnings = (): string[] => {
     const warnings: string[] = [];
 
-    if (parallelismOverride) {
-      if (parallelismManualTP !== null) {
-        // TP must be power of 2
-        if (parallelismManualTP <= 0) {
-          warnings.push('Parallelism: Tensor parallel size must be > 0');
-        } else if ((parallelismManualTP & (parallelismManualTP - 1)) !== 0) {
-          warnings.push('Parallelism: Tensor parallel size should be a power of 2 (1, 2, 4, 8, 16)');
-        }
-      }
-      if (parallelismManualReplicas !== null && parallelismManualReplicas <= 0) {
-        warnings.push('Parallelism: Replica count must be > 0');
-      }
-    }
-
     if (vllmOverride) {
       if (vllmManualMaxNumSeqs !== null && vllmManualMaxNumSeqs <= 0) {
         warnings.push('vLLM: max_num_seqs must be > 0');
       }
-      if (vllmManualMaxModelLen !== null && vllmManualMaxModelLen <= 0) {
-        warnings.push('vLLM: max_model_len must be > 0');
-      }
-      if (vllmManualGpuUtil !== null && (vllmManualGpuUtil < 50 || vllmManualGpuUtil > 95)) {
-        warnings.push('vLLM: gpu_memory_utilization should be between 50-95%');
-      }
+    }
+
+    if (servingPolicyOverride && servingManualContextLimit !== null && servingManualContextLimit <= 0) {
+      warnings.push('Serving policy: context limit must be > 0');
     }
 
     return warnings;
@@ -955,10 +974,48 @@ export default function Performance() {
       ],
     },
     {
+      id: 'context-window', title: 'Context window sizing',
+      summary: [
+        { k: 'max_seq_len', v: maxSeqLen != null ? `${maxSeqLen}` : 'auto' },
+        { k: 'prefill_max_seq_len', v: prefillMaxSeqLen != null ? `${prefillMaxSeqLen}` : 'auto' },
+        { k: 'decode_max_seq_len', v: decodeMaxSeqLen != null ? `${decodeMaxSeqLen}` : 'auto' },
+      ],
+      fields: [
+        {
+          label: 'Max sequence length (tokens)',
+          value: maxSeqLenInput,
+          term: 'maxModelLen',
+          type: 'number' as const,
+          placeholder: 'ISL + OSL',
+          invalid: invalidMaxSeqLen,
+          onChange: (val: string) => handleSequenceLengthChange(val, setMaxSeqLenInput, setMaxSeqLen),
+        },
+        {
+          label: 'Prefill length (tokens)',
+          value: prefillMaxSeqLenInput,
+          term: 'prefillMaxSeqLen',
+          type: 'number' as const,
+          placeholder: 'Optional override',
+          invalid: invalidPrefillMaxSeqLen,
+          onChange: (val: string) => handleSequenceLengthChange(val, setPrefillMaxSeqLenInput, setPrefillMaxSeqLen),
+        },
+        {
+          label: 'Decode length (tokens)',
+          value: decodeMaxSeqLenInput,
+          term: 'decodeMaxSeqLen',
+          type: 'number' as const,
+          placeholder: 'Optional override',
+          invalid: invalidDecodeMaxSeqLen,
+          onChange: (val: string) => handleSequenceLengthChange(val, setDecodeMaxSeqLenInput, setDecodeMaxSeqLen),
+        },
+      ],
+    },
+    {
       id: 'memory', title: 'Precision & memory',
       summary: [
         { k: 'weights', v: actualWeightPrecision },
         { k: 'KV', v: testKVCachePrecision },
+        { k: 'GPU memory', v: effectiveGpuMemoryUtilization != null ? `${(effectiveGpuMemoryUtilization * 100).toFixed(1)}%` : 'auto' },
         ...(isMoeModel ? [{
           k: 'MoE',
           v: testMoeQuantMode === 'w4a16_mxfp4' ? 'W4A16' :
@@ -1011,30 +1068,37 @@ export default function Performance() {
           },
           help: 'W4A16: best quality, H100+. W4A8: ~2× faster on B200. CUTLASS: H100-optimized. TRT-LLM: B200 TRT-LLM variant.'
         }] : []),
+        {
+          label: 'GPU memory utilization',
+          value: effectiveGpuMemoryUtilization != null ? `${(effectiveGpuMemoryUtilization * 100).toFixed(1)}%` : 'auto',
+          term: 'gpuUtil',
+          readonly: !memoryOverride,
+          type: memoryOverride ? 'range' as const : undefined,
+          min: memoryOverride ? 10 : undefined,
+          max: memoryOverride ? 100 : undefined,
+          step: memoryOverride ? 0.5 : undefined,
+          rangeValue: memoryOverride && effectiveGpuMemoryUtilization != null ? effectiveGpuMemoryUtilization * 100 : undefined,
+          onChange: memoryOverride ? (val: number) => setGpuMemoryUtilization(val / 100) : undefined,
+          help: 'Range: 10–100%, in 0.5% steps. Leave on auto to use the backend-specific AISimulate default.',
+        },
       ],
+      badge: memoryOverride ? 'Manual override' : 'Auto-computed',
+      badgeColor: memoryOverride ? 'orange' : 'blue',
+      hasOverride: true,
+      isOverridden: memoryOverride,
+      onOverrideToggle: () => {
+        if (memoryOverride) {
+          setMemoryOverride(false);
+          setGpuMemoryUtilization(null);
+        } else {
+          setMemoryOverride(true);
+          if (effectiveGpuMemoryUtilization != null) setGpuMemoryUtilization(effectiveGpuMemoryUtilization);
+        }
+      },
     },
     {
       id: 'parallel',
       title: 'Parallelism',
-      badge: parallelismOverride ? 'Manual override' : 'Auto-computed',
-      badgeColor: parallelismOverride ? 'orange' : 'blue',
-      hasOverride: true,
-      isOverridden: parallelismOverride,
-      onOverrideToggle: () => {
-        if (parallelismOverride) {
-          // Reset to auto
-          setParallelismOverride(false);
-          setParallelismManualTP(null);
-          setParallelismManualReplicas(null);
-        } else {
-          // Enable manual override - initialize with current computed values
-          setParallelismOverride(true);
-          if (testResult) {
-            setParallelismManualTP(testResult.memory_analysis.tp_size);
-            setParallelismManualReplicas(testResult.memory_analysis.replicas);
-          }
-        }
-      },
       summary: [
         { k: 'TP', v: `${testTpSize}` },
         { k: 'PP', v: `${testPpSize}` },
@@ -1090,6 +1154,45 @@ export default function Performance() {
       ],
     },
     {
+      id: 'serving',
+      title: 'Serving policy',
+      badge: servingPolicyOverride ? 'Manual override' : 'Auto-computed',
+      badgeColor: servingPolicyOverride ? 'orange' : 'blue',
+      hasOverride: true,
+      isOverridden: servingPolicyOverride,
+      onOverrideToggle: () => {
+        if (servingPolicyOverride) {
+           setServingPolicyOverride(false);
+           setServingManualContextLimit(null);
+        } else {
+          setServingPolicyOverride(true);
+           if (testResult) {
+             setServingManualContextLimit(testResult.vllm_config.max_model_len);
+          }
+        }
+      },
+      summary: [
+        { k: 'context limit', v: servingPolicyOverride && servingManualContextLimit !== null ? `${servingManualContextLimit}` : testResult ? `${testResult.vllm_config.max_model_len}` : '—' },
+        { k: 'prefix caching', v: testResult ? (testResult.vllm_config.enable_prefix_caching ? 'on' : 'off') : '—' },
+      ],
+      fields: [
+        {
+          label: 'Serving context limit',
+          value: servingPolicyOverride && servingManualContextLimit !== null ? `${servingManualContextLimit}` : testResult ? `${testResult.vllm_config.max_model_len}` : '—',
+          term: 'maxModelLen',
+          readonly: !servingPolicyOverride,
+          type: servingPolicyOverride ? 'number' as const : undefined,
+          onChange: servingPolicyOverride ? (val: string) => setServingManualContextLimit(parseInt(val) || 1) : undefined,
+        },
+        {
+          label: 'Prefix caching',
+          value: testResult ? (testResult.vllm_config.enable_prefix_caching ? 'On' : 'Off') : '—',
+          term: 'prefixCaching',
+          readonly: true,
+        },
+      ],
+    },
+    {
       id: 'engine',
       title: 'vLLM config',
       badge: vllmOverride ? 'Manual override' : 'Auto-computed',
@@ -1098,22 +1201,16 @@ export default function Performance() {
       isOverridden: vllmOverride,
       onOverrideToggle: () => {
         if (vllmOverride) {
-          // Reset to auto
-          setVllmOverride(false);
-          setVllmManualMaxNumSeqs(null);
-          setVllmManualMaxModelLen(null);
-          setVllmManualChunkedPrefill(null);
-          setVllmManualPrefixCaching(null);
-          setVllmManualGpuUtil(null);
+           // Reset to auto
+           setVllmOverride(false);
+           setVllmManualMaxNumSeqs(null);
+           setVllmManualChunkedPrefill(null);
         } else {
           // Enable manual override - initialize with current computed values
-          setVllmOverride(true);
-          if (testResult) {
-            setVllmManualMaxNumSeqs(testResult.vllm_config.max_num_seqs);
-            setVllmManualMaxModelLen(testResult.vllm_config.max_model_len);
-            setVllmManualChunkedPrefill(testResult.vllm_config.enable_chunked_prefill);
-            setVllmManualPrefixCaching(testResult.vllm_config.enable_prefix_caching);
-            setVllmManualGpuUtil(Math.round(testResult.vllm_config.gpu_memory_utilization * 100));
+           setVllmOverride(true);
+           if (testResult) {
+             setVllmManualMaxNumSeqs(testResult.vllm_config.max_num_seqs);
+             setVllmManualChunkedPrefill(testResult.vllm_config.enable_chunked_prefill);
           }
         }
       },
@@ -1131,14 +1228,6 @@ export default function Performance() {
           onChange: vllmOverride ? (val: string) => setVllmManualMaxNumSeqs(parseInt(val) || 1) : undefined
         },
         {
-          label: 'max_model_len',
-          value: vllmOverride && vllmManualMaxModelLen !== null ? `${vllmManualMaxModelLen}` : testResult ? `${testResult.vllm_config.max_model_len}` : '—',
-          term: 'maxModelLen',
-          readonly: !vllmOverride,
-          type: vllmOverride ? 'number' as const : undefined,
-          onChange: vllmOverride ? (val: string) => setVllmManualMaxModelLen(parseInt(val) || 1) : undefined
-        },
-        {
           label: 'enable_chunked_prefill',
           value: vllmOverride && vllmManualChunkedPrefill !== null ? (vllmManualChunkedPrefill ? 'Yes' : 'No') : testResult ? (testResult.vllm_config.enable_chunked_prefill ? 'Yes' : 'No') : '—',
           term: 'chunkedPrefill',
@@ -1146,27 +1235,6 @@ export default function Performance() {
           type: vllmOverride ? 'select' as const : undefined,
           options: vllmOverride ? ['Yes', 'No'] : undefined,
           onChange: vllmOverride ? (val: string) => setVllmManualChunkedPrefill(val === 'Yes') : undefined
-        },
-        {
-          label: 'enable_prefix_caching',
-          value: vllmOverride && vllmManualPrefixCaching !== null ? (vllmManualPrefixCaching ? 'Yes' : 'No') : testResult ? (testResult.vllm_config.enable_prefix_caching ? 'Yes' : 'No') : '—',
-          term: 'prefixCaching',
-          readonly: !vllmOverride,
-          type: vllmOverride ? 'select' as const : undefined,
-          options: vllmOverride ? ['Yes', 'No'] : undefined,
-          onChange: vllmOverride ? (val: string) => setVllmManualPrefixCaching(val === 'Yes') : undefined
-        },
-        {
-          label: 'gpu_memory_utilization',
-          value: vllmOverride && vllmManualGpuUtil !== null ? `${vllmManualGpuUtil}%` : testResult ? `${(testResult.vllm_config.gpu_memory_utilization * 100).toFixed(0)}%` : '—',
-          term: 'gpuUtil',
-          readonly: !vllmOverride,
-          type: vllmOverride ? 'range' as const : undefined,
-          min: vllmOverride ? 50 : undefined,
-          max: vllmOverride ? 95 : undefined,
-          step: vllmOverride ? 5 : undefined,
-          rangeValue: vllmOverride && vllmManualGpuUtil !== null ? vllmManualGpuUtil : undefined,
-          onChange: vllmOverride ? (val: number) => setVllmManualGpuUtil(val) : undefined
         },
       ],
     },
@@ -1236,9 +1304,8 @@ export default function Performance() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
           <Button
             variant="primary"
-            size="lg"
             onClick={() => { setTestResult(null); setTestError(null); setTestErrorCode(null); setCalcTrigger(t => t + 1); }}
-            isDisabled={isCalculating || !gpu || !model || catalogLoading || invalidISL || invalidOSL || invalidUsers || invalidTpSize || invalidPpSize}
+            isDisabled={isCalculating || !gpu || !model || catalogLoading || invalidISL || invalidOSL || invalidUsers || invalidTpSize || invalidPpSize || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen}
           >
             {isCalculating ? 'Calculating...' : 'Calculate'}
           </Button>
@@ -1734,17 +1801,16 @@ export default function Performance() {
       {testResult && testResult.performance && (
         <div className={styles.card} style={{ marginBottom: 20 }}>
           <Accordion>
-            <AccordionItem>
+            <AccordionItem isExpanded={expanded.includes('perf')}>
               <AccordionToggle
                 id="perf-toggle"
                 onClick={() => setExpanded(
                   expanded.includes('perf') ? expanded.filter(e => e !== 'perf') : [...expanded, 'perf']
                 )}
-                isExpanded={expanded.includes('perf')}
               >
                 <span style={{ fontWeight: 600 }}>Estimated serving performance</span>
               </AccordionToggle>
-              <AccordionContent isHidden={!expanded.includes('perf')}>
+              <AccordionContent>
                 <div className={styles.cardBody}>
                   <div className={styles.paramGrid}>
                     <div>
@@ -2044,10 +2110,9 @@ export default function Performance() {
 
           <Accordion asDefinitionList={false}>
             {buildAccordionSections().map((sec) => (
-              <AccordionItem key={sec.id}>
+              <AccordionItem key={sec.id} isExpanded={expanded.includes(sec.id)}>
                 <AccordionToggle
                   id={`acc-${sec.id}`}
-                  isExpanded={expanded.includes(sec.id)}
                   onClick={() => toggleAcc(sec.id)}
                 >
                   <span style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', width: '100%' }}>
@@ -2076,7 +2141,7 @@ export default function Performance() {
                     )}
                   </span>
                 </AccordionToggle>
-                <AccordionContent isHidden={!expanded.includes(sec.id)}>
+                <AccordionContent>
                   <div className={styles.accGrid}>
                     {sec.fields.map((f: any) => (
                       <div key={f.label} className={styles.accField}>
@@ -2224,7 +2289,7 @@ export default function Performance() {
         duration={debugDuration}
         open={debugOpen}
         onToggle={setDebugOpen}
-        endpoint="POST /api/estimate"
+        endpoint="POST /api/predict"
       />
     </div>
   );

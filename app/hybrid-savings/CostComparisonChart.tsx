@@ -7,7 +7,7 @@ import {
   ChartLine,
   ChartScatter,
   ChartVoronoiContainer,
-} from '@patternfly/react-charts'
+} from '@patternfly/react-charts/victory'
 import type { CostLens, CostPoint } from '@/lib/hybrid-savings/calc'
 import styles from './hybrid-savings.module.css'
 
