@@ -1304,7 +1304,6 @@ export default function Performance() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
           <Button
             variant="primary"
-            size="lg"
             onClick={() => { setTestResult(null); setTestError(null); setTestErrorCode(null); setCalcTrigger(t => t + 1); }}
             isDisabled={isCalculating || !gpu || !model || catalogLoading || invalidISL || invalidOSL || invalidUsers || invalidTpSize || invalidPpSize || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen}
           >
