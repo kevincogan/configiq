@@ -50,7 +50,6 @@ AZURE_GPUS_PER_INSTANCE = {
     "Standard_ND96asr_v4": 8,
     "Standard_ND96amsr_A100_v4": 8,
     "Standard_NC80adis_H100_v5": 2,
-    "Standard_ND96isr_H100_v5": 8,
 }
 AZURE_API = "https://prices.azure.com/api/retail/prices"
 

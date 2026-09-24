@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  modelHasTestedConfiguration,
+  isModelListedAsTested,
   modelParameterBillions,
   modelSizeLabel,
   modelTierLabel,
@@ -27,6 +27,13 @@ describe('hybrid model catalogue labels', () => {
     expect(modelParameterBillions('meta-llama/Llama-4-Scout-17B-16E-Instruct')).toBe(108.6)
   })
 
+  it('uses the actual parameter size for DeepSeek R1 distill checkpoints', () => {
+    expect(modelSizeLabel('deepseek-ai/DeepSeek-R1-Distill-Qwen-32B')).toBe('32B parameters')
+    expect(modelTierLabel('deepseek-ai/DeepSeek-R1-Distill-Qwen-32B')).toBe('Medium model')
+    expect(modelSizeLabel('deepseek-ai/DeepSeek-R1-Distill-Llama-8B')).toBe('8B parameters')
+    expect(modelSizeLabel('deepseek-ai/DeepSeek-R1-0528')).toBe('684.5B parameters')
+  })
+
   it('classifies representative small, medium and large models', () => {
     expect(modelTierLabel('Qwen/Qwen3-8B')).toBe('Small model')
     expect(modelTierLabel('Qwen/Qwen3-32B')).toBe('Medium model')
@@ -36,7 +43,7 @@ describe('hybrid model catalogue labels', () => {
   it('matches tested configurations without depending on casing or whitespace', () => {
     const testedModels = [' moonshotai/Kimi-K3 ', 'openai/gpt-oss-120b']
 
-    expect(modelHasTestedConfiguration('MoonshotAI/kimi-k3', testedModels)).toBe(true)
-    expect(modelHasTestedConfiguration('Qwen/Qwen3-8B', testedModels)).toBe(false)
+    expect(isModelListedAsTested('MoonshotAI/kimi-k3', testedModels)).toBe(true)
+    expect(isModelListedAsTested('Qwen/Qwen3-8B', testedModels)).toBe(false)
   })
 })

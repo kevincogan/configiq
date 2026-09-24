@@ -56,7 +56,7 @@ import {
 } from '@/lib/hybrid-savings/cloud-offer-catalog'
 import { resolveHostedPricing } from '@/lib/hybrid-savings/hosted-pricing'
 import {
-  modelHasTestedConfiguration,
+  isModelListedAsTested,
   modelParameterBillions,
   modelSizeLabel,
   modelTierLabel,
@@ -477,6 +477,15 @@ function NumberField({
   const displayValue = formatWithCommas
     ? Math.round(value).toLocaleString('en-US')
     : value
+  const [draft, setDraft] = React.useState<string | null>(null)
+
+  const commit = () => {
+    if (draft === null) return
+    const normalized = formatWithCommas ? draft.replace(/,/g, '') : draft
+    const parsed = Math.max(numberValue(normalized, min), min)
+    onChange(max === undefined ? parsed : Math.min(parsed, max))
+    setDraft(null)
+  }
 
   return (
     <FormGroup label={label} fieldId={id}>
@@ -487,11 +496,15 @@ function NumberField({
         min={min}
         max={max}
         step={step}
-        value={displayValue}
+        value={draft ?? displayValue}
+        onFocus={() => setDraft(String(displayValue))}
         onChange={(_event, raw) => {
-          const normalized = formatWithCommas ? raw.replace(/[^\d.-]/g, '') : raw
-          const parsed = Math.max(numberValue(normalized, min), min)
-          onChange(max === undefined ? parsed : Math.min(parsed, max))
+          if (formatWithCommas && !/^[\d,]*$/.test(raw)) return
+          setDraft(raw)
+        }}
+        onBlur={commit}
+        onKeyDown={event => {
+          if (event.key === 'Enter') event.currentTarget.blur()
         }}
       />
     </FormGroup>
@@ -696,14 +709,11 @@ export default function HybridSavings() {
   }, [workload, hostedPrice, candidates, assumptions, lastSizingSignature, isStale])
 
   const rentedReadyGpus = React.useMemo(() => gpuOptions.filter(gpu => (
-    hasRentedCloudOffer(gpu.systemId, costings.gpuCloudRates.get(gpu.systemId))
-  )), [gpuOptions, costings.gpuCloudRates])
+    hasRentedCloudOffer(gpu.systemId)
+  )), [gpuOptions])
   const purchaseReadyGpus = React.useMemo(() => gpuOptions.filter(gpu => (
-    hasServerPurchaseConfiguration(
-      gpu.systemId,
-      costings.gpuHardwareCosts.get(gpu.systemId),
-    )
-  )), [gpuOptions, costings.gpuHardwareCosts])
+    hasServerPurchaseConfiguration(gpu.systemId)
+  )), [gpuOptions])
   const priceReadyGpus = React.useMemo(() => gpuOptions.filter(gpu => (
     rentedReadyGpus.some(candidate => candidate.systemId === gpu.systemId) ||
     purchaseReadyGpus.some(candidate => candidate.systemId === gpu.systemId)
@@ -778,14 +788,11 @@ export default function HybridSavings() {
           if (data.status === 'completed') {
             const cloudOffers = resolveRentedCloudOffers(
               gpu.systemId,
-              costings.gpuCloudRates.get(gpu.systemId),
               preferredCloudProvider,
             )
-            const hardwareCost = costings.gpuHardwareCosts.get(gpu.systemId)
             const purchaseConfigurations = resolveCompatibleServerPurchaseConfigurations(
               gpu.systemId,
               data.recommendation.gpusPerReplica,
-              hardwareCost,
             )
             if (cloudOffers.length > 0) {
               results.push(...cloudOffers.map(cloudOffer => (
@@ -986,7 +993,7 @@ export default function HybridSavings() {
                   )
                   const selectedPrice = pricing.selected
                   const selected = candidateId === model
-                  const hasTestedConfiguration = modelHasTestedConfiguration(candidateId, testedModels)
+                  const isTestedModel = isModelListedAsTested(candidateId, testedModels)
                   return (
                     <Card
                       component="button"
@@ -1004,11 +1011,13 @@ export default function HybridSavings() {
                         <div className={styles.modelCardTop}>
                           <span className={styles.modelSize}>{modelSizeLabel(candidateId)}</span>
                           <Label
-                            color={hasTestedConfiguration ? 'blue' : 'green'}
+                            color={isTestedModel ? 'blue' : 'green'}
                             isCompact
-                            title={hasTestedConfiguration ? 'Tested configuration available' : 'Available in AISimulators catalogue'}
+                            title={isTestedModel
+                              ? "Listed as tested in ConfigIQ's app config; the live catalogue doesn't report system-specific test status."
+                              : 'Available in the live AISimulators catalogue'}
                           >
-                            {hasTestedConfiguration ? 'Tested' : 'In catalog'}
+                            {isTestedModel ? 'Tested' : 'In catalog'}
                           </Label>
                         </div>
                         {!modelSearch.trim() && <span className={styles.modelTier}>Typical {modelTierLabel(candidateId).toLowerCase()}</span>}
@@ -1223,9 +1232,12 @@ export default function HybridSavings() {
         </CardBody>
       </Card>
 
-      <Alert title="Use this as a planning comparison" variant="info" isInline>
-        AISimulators results are estimates unless a model/system is marked Tested. Public catalogue prices can differ from negotiated quotes. Validate the selected configuration, workload benchmark and commercial terms before a production decision.
-      </Alert>
+      <aside className={styles.planningNote} aria-label="Planning guidance">
+        <strong>Planning estimate</strong>
+        <p>
+          AISimulators sizing is estimated. “Tested” listings have real-hardware benchmark evidence, but may not match your workload. Catalogue prices can differ from negotiated rates—validate performance and pricing before production.
+        </p>
+      </aside>
     </main>
   )
 }

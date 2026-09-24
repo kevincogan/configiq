@@ -64,6 +64,6 @@ describe('cloud-rate normalization', () => {
       },
     })
 
-    expect(selected).toMatchObject({ rate: 6.88, gpusPerInstance: 8, kind: 'on_demand' })
+    expect(selected).toMatchObject({ rate: 6.88, kind: 'on_demand' })
   })
 })

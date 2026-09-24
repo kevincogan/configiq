@@ -1,5 +1,3 @@
-import type { CloudRates } from '@/lib/hooks/useCostings'
-
 export type RentedRateKind = 'on_demand' | 'spot' | 'capacity_block'
 
 /**
@@ -120,81 +118,14 @@ function providerId(providerRegion: string): string {
   return providerRegion.split('.')[0].toLowerCase()
 }
 
-function sharedOffers(
-  systemId: string,
-  rates: Record<string, CloudRates> | undefined,
-): RentedCloudOffer[] {
-  if (!rates) return []
-  const result: RentedCloudOffer[] = []
-  for (const [region, record] of Object.entries(rates)) {
-    const gpuCount = Math.max(Math.ceil(record.gpus_per_instance ?? 1), 1)
-    const provider = providerId(region)
-    if (record.on_demand != null && record.on_demand > 0) {
-      result.push(offer(
-        `aicostings-${systemId}-${region}-on-demand`,
-        systemId,
-        provider,
-        region,
-        `${provider.toUpperCase()} ${gpuCount}× GPU instance`,
-        gpuCount,
-        record.on_demand * gpuCount,
-        'Shared aicostings aggregate rate',
-        null,
-        null,
-      ))
-    }
-    if (record.spot_median != null && record.spot_median > 0) {
-      result.push(offer(
-        `aicostings-${systemId}-${region}-spot`,
-        systemId,
-        provider,
-        region,
-        `${provider.toUpperCase()} ${gpuCount}× GPU marketplace shape`,
-        gpuCount,
-        record.spot_median * gpuCount,
-        'Shared aicostings spot/marketplace rate',
-        null,
-        null,
-        'spot',
-      ))
-    }
-  }
-  return result
-}
-
-function mergeSharedRates(
-  snapshots: RentedCloudOffer[],
-  shared: RentedCloudOffer[],
-): RentedCloudOffer[] {
-  const result = [...snapshots]
-  for (const live of shared) {
-    const matchingSnapshotIndex = result.findIndex(candidate => (
-      candidate.systemId === live.systemId &&
-      candidate.provider === live.provider &&
-      candidate.gpuCount === live.gpuCount &&
-      candidate.rateKind === live.rateKind
-    ))
-    if (matchingSnapshotIndex >= 0 && live.rateKind === 'on_demand') {
-      const snapshot = result[matchingSnapshotIndex]
-      result[matchingSnapshotIndex] = {
-        ...snapshot,
-        hourlyCost: live.hourlyCost,
-        sourceLabel: `${snapshot.sourceLabel} · refreshed by aicostings`,
-        sourceDate: live.sourceDate ?? snapshot.sourceDate,
-      }
-    }
-  }
-  return result
-}
-
 /** Return every complete offer for a system; topology filtering happens after sizing. */
 export function resolveRentedCloudOffers(
   systemId: string,
-  rates?: Record<string, CloudRates>,
   preferredProviderRegion?: string | null,
 ): RentedCloudOffer[] {
-  const snapshots = RENTED_CLOUD_OFFERS.filter(candidate => candidate.systemId === systemId)
-  let resolved = mergeSharedRates(snapshots, sharedOffers(systemId, rates))
+  // The shared aicostings rate is aggregated by GPU family and provider region.
+  // Without an instance SKU it cannot safely replace a complete offer's price.
+  let resolved = RENTED_CLOUD_OFFERS.filter(candidate => candidate.systemId === systemId)
 
   if (preferredProviderRegion) {
     const exact = resolved.filter(candidate => candidate.providerRegion === preferredProviderRegion)
@@ -216,7 +147,6 @@ export function resolveRentedCloudOffers(
 
 export function hasRentedCloudOffer(
   systemId: string,
-  rates?: Record<string, CloudRates>,
 ): boolean {
-  return resolveRentedCloudOffers(systemId, rates).length > 0
+  return resolveRentedCloudOffers(systemId).length > 0
 }

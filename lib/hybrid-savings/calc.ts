@@ -101,7 +101,6 @@ export interface CostOption {
   gpuCount: number | null
   billedGpuCount: number | null
   replicas: number | null
-  monthlyCapacityTokens: number | null
   utilizationPct: number | null
   breakdown: CostBreakdownItem[]
 }
@@ -252,7 +251,6 @@ export function hostedCostAtVolume(
     gpuCount: null,
     billedGpuCount: null,
     replicas: null,
-    monthlyCapacityTokens: null,
     utilizationPct: null,
     breakdown,
   }
@@ -457,7 +455,6 @@ function rentedCostForCandidate(
     gpuCount: deployment.gpuCount,
     billedGpuCount: layout.billedGpuCount,
     replicas: deployment.replicas,
-    monthlyCapacityTokens: deployment.capacityPerReplica * deployment.replicas,
     utilizationPct: deployment.capacityPerReplica > 0 && deployment.replicas > 0
       ? Math.min(safeVolume / (deployment.capacityPerReplica * deployment.replicas) * 100, 100)
       : null,
@@ -585,7 +582,6 @@ function ownedCostForCandidate(
     gpuCount: deployment.gpuCount,
     billedGpuCount,
     replicas: deployment.replicas,
-    monthlyCapacityTokens: deployment.capacityPerReplica * serverCount * replicasPerServer,
     utilizationPct: deployment.capacityPerReplica > 0 && serverCount > 0
       ? Math.min(safeVolume / (deployment.capacityPerReplica * serverCount * replicasPerServer) * 100, 100)
       : null,

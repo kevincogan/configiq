@@ -37,23 +37,26 @@ describe('complete rented cloud offers', () => {
     expect(offers.every(offer => offer.hourlyCost > 0)).toBe(true)
   })
 
+  it('keeps the exact instance price and provenance rather than an aggregate family rate', () => {
+    const offers = resolveRentedCloudOffers('a100_sxm')
+    const awsOffer = offers.find(offer => offer.id === 'aws-p4de-24xlarge')
+
+    expect(awsOffer).toMatchObject({
+      providerRegion: 'aws.us-east-1',
+      instanceName: 'EC2 p4de.24xlarge',
+      hourlyCost: 40.96,
+      sourceLabel: 'AWS P4de public On-Demand price',
+    })
+  })
+
   it('honors the selected provider without collapsing its instance shapes', () => {
-    const offers = resolveRentedCloudOffers('a100_sxm', undefined, 'gcp.us-central1')
+    const offers = resolveRentedCloudOffers('a100_sxm', 'gcp.us-central1')
     expect(offers.every(offer => offer.provider === 'gcp')).toBe(true)
     expect(new Set(offers.map(offer => offer.gpuCount))).toEqual(new Set([1, 2, 4, 8]))
   })
 
   it('does not let a spot rate silently beat stable on-demand offers', () => {
-    const offers = resolveRentedCloudOffers('h200_sxm', {
-      'vast.marketplace': {
-        on_demand: null,
-        reserved_1yr: null,
-        reserved_3yr: null,
-        spot_median: 1,
-        rate_basis: 'gpu_hour',
-        gpus_per_instance: 1,
-      },
-    })
+    const offers = resolveRentedCloudOffers('h200_sxm')
     expect(offers.some(offer => offer.rateKind === 'spot')).toBe(false)
   })
 
@@ -62,17 +65,7 @@ describe('complete rented cloud offers', () => {
     expect(hasRentedCloudOffer('b300_sxm')).toBe(false)
   })
 
-  it('does not rank an aggregate rate without a complete instance identity', () => {
-    const offers = resolveRentedCloudOffers('gb300', {
-      'future.region': {
-        on_demand: 12,
-        reserved_1yr: null,
-        reserved_3yr: null,
-        spot_median: null,
-        rate_basis: 'gpu_hour',
-        gpus_per_instance: 4,
-      },
-    })
-    expect(offers).toHaveLength(0)
+  it('does not rank a system without a complete instance identity', () => {
+    expect(resolveRentedCloudOffers('gb300')).toHaveLength(0)
   })
 })

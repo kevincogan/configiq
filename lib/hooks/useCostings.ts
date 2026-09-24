@@ -37,16 +37,6 @@ export interface HardwareCost {
   source_label: string | null
   source_url: string | null
   source_date: string | null
-  server_configurations?: Record<string, {
-    new_usd: number
-    new_usd_low: number | null
-    new_usd_high: number | null
-    installation_usd: number
-    indicative?: boolean
-    source_label?: string | null
-    source_url?: string | null
-    source_date?: string | null
-  }>
 }
 
 export interface SourceStatus {
@@ -79,7 +69,6 @@ export interface ResolvedCloudRate {
   rate: number
   provider: string // provider.region key, e.g. "aws.us-east-1"
   kind: 'on_demand' | 'spot'
-  gpusPerInstance: number
 }
 
 // Compatibility for the current prototype API, whose AWS and Azure values are
@@ -156,18 +145,18 @@ export function resolveCloudRate(
 
   if (preferredProvider) {
     const pr = cloudRates[preferredProvider]
-    if (pr?.on_demand != null) return { rate: pr.on_demand, provider: preferredProvider, kind: 'on_demand', gpusPerInstance: pr.gpus_per_instance ?? 1 }
-    if (pr?.spot_median != null) return { rate: pr.spot_median, provider: preferredProvider, kind: 'spot', gpusPerInstance: pr.gpus_per_instance ?? 1 }
+    if (pr?.on_demand != null) return { rate: pr.on_demand, provider: preferredProvider, kind: 'on_demand' }
+    if (pr?.spot_median != null) return { rate: pr.spot_median, provider: preferredProvider, kind: 'spot' }
   }
 
   let cheapestOnDemand: ResolvedCloudRate | null = null
   let cheapestSpot: ResolvedCloudRate | null = null
   for (const [provider, r] of Object.entries(cloudRates)) {
     if (r.on_demand != null && (cheapestOnDemand == null || r.on_demand < cheapestOnDemand.rate)) {
-      cheapestOnDemand = { rate: r.on_demand, provider, kind: 'on_demand', gpusPerInstance: r.gpus_per_instance ?? 1 }
+      cheapestOnDemand = { rate: r.on_demand, provider, kind: 'on_demand' }
     }
     if (r.spot_median != null && (cheapestSpot == null || r.spot_median < cheapestSpot.rate)) {
-      cheapestSpot = { rate: r.spot_median, provider, kind: 'spot', gpusPerInstance: r.gpus_per_instance ?? 1 }
+      cheapestSpot = { rate: r.spot_median, provider, kind: 'spot' }
     }
   }
   return cheapestOnDemand ?? cheapestSpot

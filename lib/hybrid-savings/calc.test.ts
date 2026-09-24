@@ -638,8 +638,8 @@ describe('hybrid savings calculations', () => {
     expect(fullTco.options.find(option => option.key === 'owned')?.monthlyCost).toBeGreaterThan(
       marginal.options.find(option => option.key === 'owned')?.monthlyCost ?? 0,
     )
-    expect(fullTco.options.find(option => option.key === 'owned')?.monthlyCapacityTokens).toBe(
-      marginal.options.find(option => option.key === 'owned')?.monthlyCapacityTokens,
+    expect(fullTco.options.find(option => option.key === 'owned')?.billedGpuCount).toBe(
+      marginal.options.find(option => option.key === 'owned')?.billedGpuCount,
     )
   })
 
