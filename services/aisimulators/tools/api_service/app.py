@@ -126,6 +126,7 @@ class EstimateRequest(BaseModel):
     batch_size: int = Field(default=128, description="Batch size (max concurrent requests).")
     database_mode: str = Field(default="HYBRID", description="Perf database mode.")
     gemm_quant_mode: str | None = Field(default=None)
+    moe_quant_mode: str | None = Field(default=None)
     kvcache_quant_mode: str | None = Field(default=None)
     fmha_quant_mode: str | None = Field(default=None)
     moe_tp_size: int | None = Field(default=None)
@@ -829,7 +830,7 @@ def _build_serving_config(
         backend=backend,
         tensor_parallel_size=tp,
         max_model_len=max_seq_len or isl + osl,
-        max_num_seqs=min(max_num_seqs or concurrency, 256),
+        max_num_seqs=max_num_seqs if max_num_seqs is not None else min(concurrency, 256),
         gpu_memory_utilization=gpu_memory_utilization or _backend_memory_fraction(backend, backend_version),
         enable_chunked_prefill=enable_chunked_prefill if enable_chunked_prefill is not None else isl >= 4096 or concurrency >= 64,
         enable_prefix_caching=prefix_caching if prefix_caching is not None else prefix > 0,
@@ -1182,7 +1183,7 @@ def post_estimate(
     if "config" in includes:
         resp.serving_config = _build_serving_config(
             resp.backend or req.backend, req.tp_size, req.isl, req.osl,
-            req.batch_size, resp.gemm, 0, max_seq_len=req.max_seq_len,
+            req.batch_size, resp.gemm, req.prefix, max_seq_len=req.max_seq_len,
             gpu_memory_utilization=req.gpu_memory_utilization, backend_version=req.backend_version,
             max_num_seqs=req.max_num_seqs, enable_chunked_prefill=req.enable_chunked_prefill,
             prefix_caching=req.prefix_caching,
