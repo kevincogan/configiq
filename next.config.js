@@ -29,7 +29,10 @@ const nextConfig = {
     "@patternfly/react-icons",
     "@patternfly/react-table",
   ],
-  webpack(config) {
+  webpack(config, { dev }) {
+    if (dev) {
+      config.cache = { type: 'memory' };
+    }
     config.ignoreWarnings = [
       ...(config.ignoreWarnings || []),
       {
