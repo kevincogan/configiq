@@ -24,7 +24,7 @@ Built with Next.js + PatternFly, powered by our [AISimulators](https://github.co
 
 ### Prerequisites
 
-- Node.js >= 20
+- Node.js >= 20.19.0
 - npm >= 10
 
 ### Setup
