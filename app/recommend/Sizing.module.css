@@ -189,7 +189,7 @@
   background: var(--blue);
   color: #fff;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--pf-t--global--border--radius--pill, 999px);
   font-family: var(--sans);
   font-size: 15px;
   font-weight: 600;
