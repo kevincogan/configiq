@@ -1,7 +1,7 @@
 // GET /api/catalog
-// Same-origin proxy for the AISimulators catalog. Fetches /systems and
-// /models (both with specs) server-side via AISIMULATORS_GATEWAY_URL and
-// returns their raw shapes combined as { systems, models }.
+// Same-origin proxy for the AISimulators catalog. Fetches /systems, /models,
+// and /backends server-side via AISIMULATORS_GATEWAY_URL and combines their
+// raw shapes for useCatalog.
 //
 // The browser must call this route rather than AISimulators directly, so the
 // per-host gateway (host.containers.internal on each deployment) is resolved
@@ -14,6 +14,21 @@ import { gatewayTimeoutSeconds } from '@/lib/api/timeout'
 // This is the catalog fetch's own timeout (30s). The value surfaced to the
 // client below is gatewayTimeoutSeconds() — the longer recommend/predict timeout.
 const DEFAULT_TIMEOUT_SECONDS = 30
+
+function catalogResponse(systems: unknown[], models: unknown[], backends: unknown[]) {
+  return NextResponse.json(
+    { systems, models, backends, timeoutSeconds: gatewayTimeoutSeconds() },
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        // Mirrors the useCatalog client-side cache TTL (10 min).
+        'Cache-Control': 'public, s-maxage=600, stale-while-revalidate=3600',
+      },
+    },
+  )
+}
 
 export async function GET() {
   // Require the gateway to be configured; fail loud (like /recommend) rather
@@ -66,22 +81,7 @@ export async function GET() {
           { status: 502, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
         )
       }
-      return NextResponse.json(
-        {
-          systems: catalogData.systems ?? [],
-          models: catalogData.models ?? [],
-          backends: catalogData.backends ?? [],
-          timeoutSeconds: gatewayTimeoutSeconds(),
-        },
-        {
-          status: 200,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Cache-Control': 'public, s-maxage=600, stale-while-revalidate=3600',
-          },
-        },
-      )
+      return catalogResponse(catalogData.systems ?? [], catalogData.models ?? [], catalogData.backends ?? [])
     }
 
     const [systemsRes, modelsRes, backendsResult] = await Promise.all([
@@ -135,24 +135,7 @@ export async function GET() {
       }
     }
 
-    return NextResponse.json(
-      {
-        systems: systemsData.systems ?? [],
-        models: modelsData.models ?? [],
-        backends: backendsData.backends ?? [],
-        // Effective AISimulators request timeout (recommend/predict), for the loader hint.
-        timeoutSeconds: gatewayTimeoutSeconds(),
-      },
-      {
-        status: 200,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-          // Mirrors the useCatalog client-side cache TTL (10 min).
-          'Cache-Control': 'public, s-maxage=600, stale-while-revalidate=3600',
-        },
-      },
-    )
+    return catalogResponse(systemsData.systems ?? [], modelsData.models ?? [], backendsData.backends ?? [])
   } catch (err: unknown) {
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
       return NextResponse.json(
