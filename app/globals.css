@@ -44,6 +44,9 @@
   --rh-gray-10:      #f0f0f0;
 
   /* Typography fonts */
+  --font-display: "Red Hat Display", Arial, sans-serif;
+  --font-body:    "Red Hat Text", Arial, sans-serif;
+  --font-mono:    "Red Hat Mono", ui-monospace, monospace;
   --display: var(--font-display);
   --sans:    var(--font-body);
   --mono:    var(--font-mono);
