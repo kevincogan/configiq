@@ -21,10 +21,8 @@ export async function readRecommendStream(
     throw new Error(message)
   }
 
-  // A direct AISimulators request streams progress, while a request proxied
-  // through another ConfigIQ deployment returns its already-normalized JSON
-  // response. Support both contracts so the proxy path does not fail while
-  // trying to parse JSON as server-sent events.
+  // Older ConfigIQ gateways may return already-normalized JSON even when
+  // streaming was requested. Keep that response compatible with the SSE path.
   if (response.headers.get('content-type')?.includes('application/json')) {
     const body: unknown = await response.json()
     if (
