@@ -237,7 +237,7 @@ export default function ComparePage() {
           <Title headingLevel="h1" size="2xl" style={{ marginBottom: '12px' }}>
             No saved estimates yet
           </Title>
-          <Content style={{ marginBottom: '32px', color: '#6a6e73', fontSize: '15px' }}>
+          <Content component="p" style={{ marginBottom: '32px', color: '#6a6e73', fontSize: '15px' }}>
             Run Predict performance and click &ldquo;Save estimate&rdquo; to compare configurations here.
           </Content>
           <Link href="/predict">
@@ -284,7 +284,7 @@ export default function ComparePage() {
             </div>
             {showCioSummary && (
               <div style={{ marginTop: '16px' }}>
-                <Content style={{ marginBottom: '16px', lineHeight: 1.6 }}>
+                <Content component="p" style={{ marginBottom: '16px', lineHeight: 1.6 }}>
                   {generateCioSummary()}
                 </Content>
                 <Button variant="secondary" size="sm" onClick={copyCioSummary}>

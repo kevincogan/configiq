@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { Modal, ModalFooter, ModalHeader, Button, TextInput, FormGroup } from '@patternfly/react-core';
+import { Modal, ModalBody, ModalFooter, ModalHeader, Button, TextInput, FormGroup } from '@patternfly/react-core';
 
 interface SaveEstimateModalProps {
   isOpen: boolean;
@@ -35,7 +35,7 @@ export function SaveEstimateModal({ isOpen, onClose, onSave, defaultName }: Save
       variant="small"
     >
       <ModalHeader title="Save estimate" />
-      <div>
+      <ModalBody>
         <FormGroup label="Name" isRequired>
           <TextInput
             value={name}
@@ -62,7 +62,7 @@ export function SaveEstimateModal({ isOpen, onClose, onSave, defaultName }: Save
             style={{ fontFamily: 'var(--font-sans)', fontSize: '14px' }}
           />
         </FormGroup>
-      </div>
+      </ModalBody>
       <ModalFooter>
         <Button variant="primary" onClick={handleSave}>Save estimate</Button>
         <Button variant="link" onClick={onClose}>Cancel</Button>

@@ -71,10 +71,10 @@ export default function HomePage() {
     <>
       <PageSection>
         <div>
+          <Title headingLevel="h1" size="2xl">
+            ConfigIQ
+          </Title>
           <Content>
-            <Title headingLevel="h1" size="2xl">
-              ConfigIQ
-            </Title>
             <Content component="p">
               LLM inference sizing, GPU comparison, and cost modeling for
               engineers and infrastructure teams.
