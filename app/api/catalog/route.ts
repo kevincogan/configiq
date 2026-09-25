@@ -30,7 +30,27 @@ function catalogResponse(systems: unknown[], models: unknown[], backends: unknow
   )
 }
 
-export async function GET() {
+function catalogList(data: unknown, key: 'systems' | 'models' | 'backends'): unknown[] | null {
+  if (!data || typeof data !== 'object') return null
+  const value = (data as Record<string, unknown>)[key]
+  return Array.isArray(value) ? value : null
+}
+
+function invalidCatalogResponse() {
+  return NextResponse.json(
+    { status: 'failed', error: { code: 'AISIM_INVALID_RESPONSE', message: 'AISimulators catalog is missing systems or models' } },
+    { status: 502, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
+  )
+}
+
+function isSelfReferentialGateway(gatewayUrl: string, request: Request): boolean {
+  const gatewayHost = new URL(gatewayUrl).host.toLowerCase()
+  const forwardedHost = request.headers.get('x-forwarded-host')?.split(',')[0].trim()
+  return [new URL(request.url).host, request.headers.get('host'), forwardedHost]
+    .some(host => host?.toLowerCase() === gatewayHost)
+}
+
+export async function GET(request: Request) {
   // Require the gateway to be configured; fail loud (like /recommend) rather
   // than silently falling back to the public domain, which masks a misconfig
   // and bypasses the intended per-host internal gateway.
@@ -55,6 +75,12 @@ export async function GET() {
       ? `${baseUrl.replace(/\/$/, '')}/catalog`
       : null
     if (combinedCatalogUrl) {
+      if (isSelfReferentialGateway(combinedCatalogUrl, request)) {
+        return NextResponse.json(
+          { status: 'failed', error: { code: 'AISIM_INVALID_GATEWAY', message: 'AISimulators gateway points back to this ConfigIQ catalogue' } },
+          { status: 503, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
+        )
+      }
       const catalogRes = await fetch(combinedCatalogUrl, {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
@@ -72,7 +98,7 @@ export async function GET() {
           { status: 502, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
         )
       }
-      let catalogData: { systems?: unknown[]; models?: unknown[]; backends?: unknown[] }
+      let catalogData: unknown
       try {
         catalogData = await catalogRes.json()
       } catch {
@@ -81,7 +107,10 @@ export async function GET() {
           { status: 502, headers: { 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' } },
         )
       }
-      return catalogResponse(catalogData.systems ?? [], catalogData.models ?? [], catalogData.backends ?? [])
+      const systems = catalogList(catalogData, 'systems')
+      const models = catalogList(catalogData, 'models')
+      if (!systems || !models) return invalidCatalogResponse()
+      return catalogResponse(systems, models, catalogList(catalogData, 'backends') ?? [])
     }
 
     const [systemsRes, modelsRes, backendsResult] = await Promise.all([
@@ -115,9 +144,9 @@ export async function GET() {
       )
     }
 
-    let systemsData: { systems?: unknown[] }
-    let modelsData: { models?: unknown[] }
-    let backendsData: { backends?: unknown[] } = {}
+    let systemsData: unknown
+    let modelsData: unknown
+    let backendsData: unknown = {}
     try {
       systemsData = await systemsRes.json()
       modelsData = await modelsRes.json()
@@ -135,7 +164,10 @@ export async function GET() {
       }
     }
 
-    return catalogResponse(systemsData.systems ?? [], modelsData.models ?? [], backendsData.backends ?? [])
+    const systems = catalogList(systemsData, 'systems')
+    const models = catalogList(modelsData, 'models')
+    if (!systems || !models) return invalidCatalogResponse()
+    return catalogResponse(systems, models, catalogList(backendsData, 'backends') ?? [])
   } catch (err: unknown) {
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
       return NextResponse.json(
