@@ -52,7 +52,7 @@ describe('cloud-rate normalization', () => {
     expect(normalized).toBeNull()
   })
 
-  it('retains instance topology when selecting the cheapest rate', () => {
+  it('selects an on-demand rate without claiming instance topology', () => {
     const selected = resolveCloudRate({
       'aws.us-east-1': {
         on_demand: 6.88,
@@ -64,6 +64,6 @@ describe('cloud-rate normalization', () => {
       },
     })
 
-    expect(selected).toMatchObject({ rate: 6.88, kind: 'on_demand' })
+    expect(selected).toEqual({ rate: 6.88, provider: 'aws.us-east-1', kind: 'on_demand' })
   })
 })

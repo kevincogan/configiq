@@ -44,7 +44,7 @@ commercial validation.
 | Purchased energy used only active model GPUs | Spare GPUs installed in a complete server were not charged for power | Charge every installed GPU plus base server power, PUE, and the selected electricity rate. |
 | Loose hosted aliases could match a base checkpoint to an instruction-tuned or quantized offer | A different checkpoint's price could be presented as exact | Restrict matching to safe explicit aliases and reject incompatible suffix variants. |
 | Incomplete AISimulators responses could enter sizing | Invalid throughput, latency, or topology could affect ranking | Require positive GPU count, replica count, throughput, TTFT, and TPOT, plus a consistent topology. |
-| Chart/crossover boundary caps could omit late infrastructure steps | A transition after an arbitrary sampled boundary could be missed | Include before/at/after points for every relevant capacity boundary up to the 1T-token planning horizon. |
+| Chart/crossover boundary caps could omit late infrastructure steps | A transition after an arbitrary sampled boundary could be missed | Search piecewise cost intervals for the first whole-token crossover through 1T tokens; use bounded chart samples only for display. If the search work budget is exhausted, label transitions **Not verified**, never **Not reached**. |
 | The UI allowed workloads beyond the crossover search horizon | The current workload could lie outside the validated chart range | Cap the comparison input at the documented 1T-token planning horizon. |
 | Cost-source staleness was not clearly surfaced | A technically valid calculation could look commercially current | Surface shared costing-source freshness warnings and retain source dates on local complete offers. |
 

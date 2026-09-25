@@ -155,12 +155,20 @@ facilities, maintenance, and energy planning.
 
 ```text
 acquisition = complete server price * server count
-depreciation = acquisition * (1 - residual %) / lifecycle months
-capital charge = acquisition * annual capital % / 12
+hardware depreciation = hardware book value consumed across held lifecycle periods
+                        / analysis months
+capital charge = sum over held periods of
+                 average(opening book value, ending book value)
+                 * annual capital % * held months / 12
+                 / analysis months
 maintenance = acquisition * annual maintenance % / 12
 energy = (base server watts * servers + GPU TDP watts * installed GPUs)
          / 1,000 * monthly hours * PUE * electricity price/kWh
 ```
+
+Book value includes hardware and unamortized installation. The calculation
+accounts for replacement cycles when the analysis period exceeds hardware
+life, and subtracts the assumed hardware residual value.
 
 Full TCO includes depreciation, capital, commissioning, maintenance, energy,
 facilities, operations, implementation, and other explicit costs. Marginal
@@ -179,14 +187,19 @@ the selected cost lens. At every plotted volume ConfigIQ recalculates:
 - the lowest-cost eligible purchased candidate.
 
 Rented and purchased series are piecewise because whole replicas, instances,
-and servers are discrete. The chart therefore preserves vertical capacity
-steps. It does not smooth them into fractional hardware.
+and servers are discrete. The chart samples a bounded set of volumes, including
+representative capacity boundaries and crossover points, so very dense steps
+may be visually compressed; plotted costs still use whole deployments.
 
-Crossover search includes the points immediately before, at, and after every
-candidate capacity boundary up to the 1T-token planning horizon. Once a state
-first becomes true, integer binary search finds the first billed-token value.
-`Cheaper than hosted` and `lowest cost overall` are separate milestones and
-are calculated from the same cost functions used to draw the chart.
+The separate crossover search checks cost-curve intervals from low to high
+volume, prunes intervals that cannot contain a win, and finds the first
+whole-token match within affine intervals. It does not stop after an arbitrary
+number of capacity boundaries. A shared 10,000-interval work budget prevents
+pathological inputs from blocking the page: **Not verified** means that budget
+was exhausted, whereas **Not reached** means no crossover was found through
+the 1T-token planning horizon. `Cheaper than hosted` and `lowest cost overall`
+are separate milestones. Every plotted cost is recalculated from the same
+hosted, rented, and purchased cost functions used for the current workload.
 
 ## Full TCO and marginal cost
 
