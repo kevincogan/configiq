@@ -477,6 +477,7 @@ describe('hybrid savings calculations', () => {
   it('builds a zero-based chart and finds infrastructure crossovers', () => {
     const highApiPrice = { ...hostedPrice, inputPerMillion: 100, outputPerMillion: 100 }
     const result = calculateHybridComparison(workload, highApiPrice, [candidate], assumptions)
+    expect(result.transitionsVerified).toBe(true)
     expect(result.chartPoints[0].tokens).toBe(0)
     expect(result.chartPoints[1].tokens).toBe(1)
     expect(result.rentedBreakEvenTokens).not.toBeNull()
@@ -530,6 +531,70 @@ describe('hybrid savings calculations', () => {
     // token where hosted reaches that amount is 809.95B tokens.
     expect(result.rentedBreakEvenTokens).toBe(809_950_000_000)
     expect(result.chartPoints.some(point => point.tokens === tenBillionTokenStep * 81)).toBe(true)
+  })
+
+  it('matches exhaustive whole-token transitions for every rented billing mode', () => {
+    const smallWorkload: HybridWorkload = {
+      ...workload, monthlyInputTokens: 400, monthlyOutputTokens: 100,
+      averageInputTokens: 4, averageOutputTokens: 1, activeHoursPerMonth: 1,
+    }
+    const offers = [
+      {
+        ...candidate, clusterOutputTokensPerSecond: 100 / (5 * 3_600),
+        cloudGpusPerInstance: 2, cloudHourlyCostPerInstance: 150 / 730,
+        purchaseGpusPerServer: 2, purchasePricePerReplica: 9_600,
+      },
+      {
+        ...candidate, systemId: 'alternative', clusterOutputTokensPerSecond: 140 / (5 * 3_600),
+        cloudGpusPerInstance: 1, cloudHourlyCostPerInstance: 100 / 730,
+        purchaseGpusPerServer: 1, purchasePricePerReplica: 7_200,
+      },
+    ]
+    const price = { ...hostedPrice, inputPerMillion: 1_000_000, outputPerMillion: 1_000_000 }
+
+    for (const cloudBillingMode of ['scale-to-zero', 'active-window', 'always-on'] as const) {
+      const planning = {
+        ...assumptions, cloudBillingMode, cloudRuntimeBufferPct: 0,
+        annualMaintenancePct: 0, electricityPerKwh: 0,
+      }
+      const result = calculateHybridComparison(smallWorkload, price, offers, planning)
+      const expected: Array<number | null> = [null, null, null, null]
+      for (let volume = 1; volume <= 1_000; volume += 1) {
+        const hosted = hostedCostAtVolume(smallWorkload, price, planning, volume).monthlyCost
+        const rented = bestRentedAtVolume(smallWorkload, offers, planning, volume)?.monthlyCost ?? Infinity
+        const owned = bestOwnedAtVolume(smallWorkload, offers, planning, volume)?.monthlyCost ?? Infinity
+        if (expected[0] === null && rented <= hosted) expected[0] = volume
+        if (expected[1] === null && owned <= hosted) expected[1] = volume
+        if (expected[2] === null && rented <= hosted && rented <= owned) expected[2] = volume
+        if (expected[3] === null && owned <= hosted && owned <= rented) expected[3] = volume
+      }
+      const actual = [
+        result.rentedBreakEvenTokens, result.ownedBreakEvenTokens,
+        result.rentedLowestCostTokens, result.ownedLowestCostTokens,
+      ]
+      expected.forEach((value, index) => {
+        if (value !== null) expect(actual[index]).toBe(value)
+        else expect(actual[index] === null || actual[index]! > 1_000).toBe(true)
+      })
+    }
+  })
+
+  it('keeps a one-hour, 1T-token comparison and its chart bounded', () => {
+    const largeWorkload: HybridWorkload = {
+      ...workload, monthlyInputTokens: 800_000_000_000,
+      monthlyOutputTokens: 200_000_000_000, activeHoursPerMonth: 1,
+    }
+    const offers = Array.from({ length: 10 }, (_, index) => ({
+      ...candidate, systemId: `gpu_${index}`, clusterOutputTokensPerSecond: 100 + index * 10,
+    }))
+    const started = performance.now()
+    const result = calculateHybridComparison(largeWorkload, hostedPrice, offers, assumptions)
+
+    expect(result.monthlyTokens).toBe(1_000_000_000_000)
+    expect(result.chartPoints[0].tokens).toBe(0)
+    expect(result.chartPoints.some(point => point.tokens === result.monthlyTokens)).toBe(true)
+    expect(result.chartPoints.length).toBeLessThan(1_000)
+    expect(performance.now() - started).toBeLessThan(2_000)
   })
 
   it('uses the same lowest-cost formulas for every plotted chart point', () => {

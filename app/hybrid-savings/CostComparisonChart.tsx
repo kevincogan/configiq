@@ -19,6 +19,7 @@ interface CostComparisonChartProps {
   ownedBreakEvenTokens: number | null
   rentedLowestCostTokens: number | null
   ownedLowestCostTokens: number | null
+  transitionsVerified: boolean
 }
 
 function compactNumber(value: number): string {
@@ -40,15 +41,14 @@ export default function CostComparisonChart({
   ownedBreakEvenTokens,
   rentedLowestCostTokens,
   ownedLowestCostTokens,
+  transitionsVerified,
 }: CostComparisonChartProps) {
   if (points.length < 2) return null
 
-  const maximumTokens = Math.max(...points.map(point => point.tokens), 1)
-  const maximumCost = Math.max(
-    ...points.flatMap(point => [point.hosted, point.rented, point.owned])
-      .filter((value): value is number => value !== null),
-    1,
-  ) * 1.08
+  const maximumTokens = points.reduce((maximum, point) => Math.max(maximum, point.tokens), 1)
+  const maximumCost = points.reduce((maximum, point) => Math.max(
+    maximum, point.hosted ?? 0, point.rented ?? 0, point.owned ?? 0,
+  ), 1) * 1.08
   const asSeries = (key: 'hosted' | 'rented' | 'owned') =>
     points
       .filter(point => point[key] !== null)
@@ -74,7 +74,7 @@ export default function CostComparisonChart({
     return cost == null ? [] : [{ x: tokens, y: cost, name: key }]
   }
   const transitionText = (tokens: number | null) =>
-    tokens === null ? 'Not reached' : `≈ ${compactNumber(tokens)} tokens/month`
+    !transitionsVerified ? 'Not verified' : tokens === null ? 'Not reached' : `≈ ${compactNumber(tokens)} tokens/month`
   const rentedLowestMarker = markerPoint('rented', rentedLowestCostTokens)
   const ownedLowestMarker = markerPoint('owned', ownedLowestCostTokens)
   const rentedBreakEvenMarker = markerPoint('rented', rentedBreakEvenTokens)
@@ -108,6 +108,9 @@ export default function CostComparisonChart({
           <span className={styles.ownedMilestone}>Purchased {transitionText(ownedLowestCostTokens)}</span>
         </div>
       </div>
+      {!transitionsVerified && (
+        <p className={styles.currentMarker}>This workload is too complex to verify transitions across the full range. Current monthly costs remain available; narrow the inputs to check crossover points.</p>
+      )}
       <div className={styles.chartCanvas}>
         {currentLine.length > 0 && (
           <span

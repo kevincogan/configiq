@@ -1,3 +1,5 @@
+import { firstWinningVolume, TransitionSearchLimitError, type CostCurve } from './transition-search'
+
 export type CloudBillingMode = 'scale-to-zero' | 'active-window' | 'always-on'
 export type CostLens = 'fully-loaded' | 'marginal'
 
@@ -122,6 +124,7 @@ export interface HybridComparison {
   ownedBreakEvenTokens: number | null
   rentedLowestCostTokens: number | null
   ownedLowestCostTokens: number | null
+  transitionsVerified: boolean
   chartMaximumTokens: number
   chartPoints: CostPoint[]
 }
@@ -617,107 +620,64 @@ export function bestOwnedAtVolume(
   )
 }
 
-function searchVolumes(
+function candidateCurves(
   workload: HybridWorkload,
   candidates: InfrastructureCandidate[],
   assumptions: CostAssumptions,
-  maximum: number,
-): number[] {
-  const volumes = new Set<number>([1, maximum])
-  const logarithmicSamples = 720
-  for (let index = 0; index <= logarithmicSamples; index += 1) {
-    volumes.add(Math.max(1, Math.round(Math.pow(maximum, index / logarithmicSamples))))
-  }
-
+): { rented: CostCurve[]; owned: CostCurve[] } {
+  const rented: CostCurve[] = []
+  const owned: CostCurve[] = []
   for (const candidate of candidates) {
-    const step = candidateCapacityTokens(
-      workload,
-      candidate,
-      assumptions.planningCapacityUsePct,
-    )
-    if (!Number.isFinite(step) || step <= 0) continue
-    const boundaryCount = Math.floor(maximum / step)
-    for (let multiplier = 1; multiplier <= boundaryCount; multiplier += 1) {
-      const boundary = Math.round(step * multiplier)
-      volumes.add(Math.max(boundary - 1, 1))
-      volumes.add(boundary)
-      volumes.add(Math.min(boundary + 1, maximum))
-    }
-  }
+    const replicaCapacity = candidateCapacityTokens(workload, candidate, assumptions.planningCapacityUsePct)
+    if (!Number.isFinite(replicaCapacity) || replicaCapacity <= 0) continue
 
-  return [...volumes].sort((left, right) => left - right)
-}
-
-function firstBreakEven(
-  workload: HybridWorkload,
-  hostedPrice: HostedPrice,
-  candidates: InfrastructureCandidate[],
-  assumptions: CostAssumptions,
-  target: 'rented' | 'owned',
-  maximum = DEFAULT_SEARCH_MAXIMUM,
-): number | null {
-  let previous = 1
-  const isCheaper = (volume: number) => {
-    const hosted = hostedCostAtVolume(workload, hostedPrice, assumptions, volume)
-    const infrastructure = target === 'rented'
-      ? bestRentedAtVolume(workload, candidates, assumptions, volume)
-      : bestOwnedAtVolume(workload, candidates, assumptions, volume)
-    return infrastructure !== null && infrastructure.monthlyCost <= hosted.monthlyCost
-  }
-
-  for (const volume of searchVolumes(workload, candidates, assumptions, maximum)) {
-    if (isCheaper(volume)) {
-      let low = previous
-      let high = volume
-      while (low < high) {
-        const midpoint = Math.floor((low + high) / 2)
-        if (isCheaper(midpoint)) high = midpoint
-        else low = midpoint + 1
+    const rentedAtZero = rentedCostForCandidate(workload, candidate, assumptions, 0)
+    if (rentedAtZero) {
+      const layout = rentedInstanceLayout(candidate, 1)
+      if (layout) {
+        const billingMode = candidate.cloudRateKind === 'capacity_block'
+          ? 'always-on' : assumptions.cloudBillingMode
+        if (billingMode === 'scale-to-zero') {
+          const firstKnot = replicaCapacity * positive(workload.peakToAverage)
+          const sample = Math.min(1, firstKnot / 2)
+          const sampled = rentedCostForCandidate(workload, candidate, assumptions, sample)
+          if (sample > 0 && sampled) rented.push({
+            kind: 'scale-to-zero',
+            fixed: rentedAtZero.monthlyCost,
+            rate: (sampled.monthlyCost - rentedAtZero.monthlyCost) / sample,
+            firstKnot,
+            parallelism: layout.replicasPerInstance,
+          })
+        } else {
+          const capacity = replicaCapacity * layout.replicasPerInstance
+          const sample = Math.min(1, capacity / 2)
+          const sampled = rentedCostForCandidate(workload, candidate, assumptions, sample)
+          if (sample > 0 && sampled) rented.push({
+            kind: 'step',
+            fixed: rentedAtZero.monthlyCost,
+            increment: sampled.monthlyCost - rentedAtZero.monthlyCost,
+            capacity,
+          })
+        }
       }
-      return low
     }
-    previous = volume + 1
-  }
 
-  return null
-}
-
-function firstLowestCost(
-  workload: HybridWorkload,
-  hostedPrice: HostedPrice,
-  candidates: InfrastructureCandidate[],
-  assumptions: CostAssumptions,
-  target: 'rented' | 'owned',
-  maximum = DEFAULT_SEARCH_MAXIMUM,
-): number | null {
-  let previous = 1
-  const isLowestCost = (volume: number) => {
-    const hosted = hostedCostAtVolume(workload, hostedPrice, assumptions, volume)
-    const rented = bestRentedAtVolume(workload, candidates, assumptions, volume)
-    const owned = bestOwnedAtVolume(workload, candidates, assumptions, volume)
-    const selected = target === 'rented' ? rented : owned
-    if (!selected) return false
-
-    const alternatives = [hosted, target === 'rented' ? owned : rented]
-      .filter((option): option is CostOption => option !== null)
-    return alternatives.every(option => selected.monthlyCost <= option.monthlyCost)
-  }
-
-  for (const volume of searchVolumes(workload, candidates, assumptions, maximum)) {
-    if (isLowestCost(volume)) {
-      let low = previous
-      let high = volume
-      while (low < high) {
-        const midpoint = Math.floor((low + high) / 2)
-        if (isLowestCost(midpoint)) high = midpoint
-        else low = midpoint + 1
-      }
-      return low
+    const ownedAtZero = ownedCostForCandidate(workload, candidate, assumptions, 0)
+    if (ownedAtZero) {
+      const gpusPerReplica = Math.max(Math.ceil(positive(candidate.gpusPerReplica)), 1)
+      const gpusPerServer = Math.max(Math.ceil(positive(candidate.purchaseGpusPerServer ?? gpusPerReplica)), 1)
+      const capacity = replicaCapacity * Math.max(Math.floor(gpusPerServer / gpusPerReplica), 1)
+      const sample = Math.min(1, capacity / 2)
+      const sampled = ownedCostForCandidate(workload, candidate, assumptions, sample)
+      if (sample > 0 && sampled) owned.push({
+        kind: 'step',
+        fixed: ownedAtZero.monthlyCost,
+        increment: sampled.monthlyCost - ownedAtZero.monthlyCost,
+        capacity,
+      })
     }
-    previous = volume + 1
   }
-
-  return null
+  return { rented, owned }
 }
 
 function chartMaximum(
@@ -736,9 +696,7 @@ function chartMaximum(
 }
 
 function chartVolumes(
-  workload: HybridWorkload,
-  candidates: InfrastructureCandidate[],
-  assumptions: CostAssumptions,
+  curves: CostCurve[],
   maximum: number,
   anchors: number[],
 ): number[] {
@@ -747,22 +705,35 @@ function chartVolumes(
   // deployment at this point; without it, a line chart draws a false diagonal
   // from zero to the first coarse sample instead of the near-vertical step.
   const volumes = new Set<number>([0, Math.min(1, maximum), maximum, ...anchors])
-  for (let index = 0; index <= 80; index += 1) {
-    volumes.add(Math.round(maximum * index / 80))
+  const uniformSamples = 160
+  for (let index = 0; index <= uniformSamples; index += 1) {
+    volumes.add(Math.round(maximum * index / uniformSamples))
   }
-  for (const candidate of candidates) {
-    const step = candidateCapacityTokens(
-      workload,
-      candidate,
-      assumptions.planningCapacityUsePct,
-    )
-    if (!Number.isFinite(step) || step <= 0) continue
-    const boundaryCount = Math.floor(maximum / step)
-    for (let multiplier = 1; multiplier <= boundaryCount; multiplier += 1) {
-      const boundary = Math.round(step * multiplier)
-      volumes.add(Math.max(boundary - 1, 0))
-      volumes.add(boundary)
-      volumes.add(Math.min(boundary + 1, maximum))
+  const stepped = curves.filter((curve): curve is Extract<CostCurve, { kind: 'step' }> => curve.kind === 'step')
+  const stepsPerCurve = Math.max(Math.floor(120 / Math.max(stepped.length, 1)), 1)
+  for (const curve of curves) {
+    if (curve.kind === 'scale-to-zero') {
+      for (const knot of [curve.firstKnot, curve.firstKnot * curve.parallelism]) {
+        volumes.add(Math.floor(knot))
+        volumes.add(Math.ceil(knot))
+      }
+      continue
+    }
+    if (curve.kind !== 'step') continue
+    const addBoundary = (multiplier: number) => {
+      if (multiplier < 1) return
+      const lastTokenBeforeStep = Math.floor(curve.capacity * multiplier)
+      volumes.add(lastTokenBeforeStep)
+      volumes.add(lastTokenBeforeStep + 1)
+    }
+    const boundaryCount = Math.floor(maximum / curve.capacity)
+    const shown = Math.min(boundaryCount, stepsPerCurve)
+    for (let index = 1; index <= shown; index += 1) {
+      addBoundary(Math.ceil(index * boundaryCount / shown))
+    }
+    for (const anchor of anchors) {
+      addBoundary(Math.floor(anchor / curve.capacity))
+      addBoundary(Math.ceil(anchor / curve.capacity))
     }
   }
   return [...volumes]
@@ -799,34 +770,40 @@ export function calculateHybridComparison(
     (option): option is CostOption => option !== null,
   )
   const cheapest = [...options].sort((left, right) => left.monthlyCost - right.monthlyCost)[0] ?? null
-  const rentedBreakEvenTokens = firstBreakEven(
-    workload,
-    hostedPrice,
-    candidates,
-    assumptions,
-    'rented',
-  )
-  const ownedBreakEvenTokens = firstBreakEven(
-    workload,
-    hostedPrice,
-    candidates,
-    assumptions,
-    'owned',
-  )
-  const rentedLowestCostTokens = firstLowestCost(
-    workload,
-    hostedPrice,
-    candidates,
-    assumptions,
-    'rented',
-  )
-  const ownedLowestCostTokens = firstLowestCost(
-    workload,
-    hostedPrice,
-    candidates,
-    assumptions,
-    'owned',
-  )
+  const curves = candidateCurves(workload, candidates, assumptions)
+  const inputShare = workloadMix(workload).inputShare
+  const hostedCurve: CostCurve = {
+    kind: 'linear',
+    fixed: hostedCostAtVolume(workload, hostedPrice, assumptions, 0).monthlyCost,
+    rate: (inputShare * finiteNonNegative(hostedPrice.inputPerMillion)
+      + (1 - inputShare) * finiteNonNegative(hostedPrice.outputPerMillion)) / MILLION,
+  }
+  let rentedBreakEvenTokens: number | null = null
+  let ownedBreakEvenTokens: number | null = null
+  let rentedLowestCostTokens: number | null = null
+  let ownedLowestCostTokens: number | null = null
+  let transitionsVerified = true
+  try {
+    // Keep an adversarial near-tie from monopolizing the browser's main thread.
+    // In that rare case the current-workload costs remain valid, but no
+    // unverified transition may be labelled "not reached".
+    const budget = { remaining: 10_000 }
+    rentedBreakEvenTokens = firstWinningVolume(curves.rented, [hostedCurve], DEFAULT_SEARCH_MAXIMUM, budget)
+    ownedBreakEvenTokens = firstWinningVolume(curves.owned, [hostedCurve], DEFAULT_SEARCH_MAXIMUM, budget)
+    rentedLowestCostTokens = firstWinningVolume(
+      curves.rented, [hostedCurve, ...curves.owned], DEFAULT_SEARCH_MAXIMUM, budget,
+    )
+    ownedLowestCostTokens = firstWinningVolume(
+      curves.owned, [hostedCurve, ...curves.rented], DEFAULT_SEARCH_MAXIMUM, budget,
+    )
+  } catch (error) {
+    if (!(error instanceof TransitionSearchLimitError)) throw error
+    transitionsVerified = false
+    rentedBreakEvenTokens = null
+    ownedBreakEvenTokens = null
+    rentedLowestCostTokens = null
+    ownedLowestCostTokens = null
+  }
   const chartMaximumTokens = chartMaximum(
     facts.monthlyTokens,
     [
@@ -844,9 +821,7 @@ export function calculateHybridComparison(
     ownedLowestCostTokens,
   ].filter((value): value is number => value !== null)
   const chartPoints = chartVolumes(
-    workload,
-    candidates,
-    assumptions,
+    [...curves.rented, ...curves.owned],
     chartMaximumTokens,
     anchors,
   )
@@ -867,6 +842,7 @@ export function calculateHybridComparison(
     ownedBreakEvenTokens,
     rentedLowestCostTokens,
     ownedLowestCostTokens,
+    transitionsVerified,
     chartMaximumTokens,
     chartPoints,
   }

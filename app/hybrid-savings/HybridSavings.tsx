@@ -1170,8 +1170,8 @@ export default function HybridSavings() {
               </div>
               <p className={styles.workloadProfileNote}><strong>{selectedProfile.label} sizing:</strong> {compactNumber(facts.averageTokensPerRequest)} average tokens per request, {formatter.format(targetTpotMs)} ms maximum TPOT and {preciseRate(facts.peakRequestsPerSecond)} peak requests/second. AISimulators measures serving capacity at {AISIMULATORS_CAPACITY_CONCURRENCY} concurrent requests while enforcing the latency targets.</p>
               <div className={styles.crossoverGrid}>
-                <div><span>Rented transition</span><strong>{comparison.rentedLowestCostTokens === null ? 'Not the lowest-cost option by 1T tokens/month' : `First becomes the lowest-cost option at ≈ ${compactNumber(comparison.rentedLowestCostTokens)} tokens/month`}</strong></div>
-                <div><span>Purchased transition</span><strong>{comparison.ownedLowestCostTokens === null ? 'Not the lowest-cost option by 1T tokens/month' : `First becomes the lowest-cost option at ≈ ${compactNumber(comparison.ownedLowestCostTokens)} tokens/month`}</strong></div>
+                <div><span>Rented transition</span><strong>{!comparison.transitionsVerified ? 'Transition not verified for this workload' : comparison.rentedLowestCostTokens === null ? 'Not the lowest-cost option by 1T tokens/month' : `First becomes the lowest-cost option at ≈ ${compactNumber(comparison.rentedLowestCostTokens)} tokens/month`}</strong></div>
+                <div><span>Purchased transition</span><strong>{!comparison.transitionsVerified ? 'Transition not verified for this workload' : comparison.ownedLowestCostTokens === null ? 'Not the lowest-cost option by 1T tokens/month' : `First becomes the lowest-cost option at ≈ ${compactNumber(comparison.ownedLowestCostTokens)} tokens/month`}</strong></div>
               </div>
               <ExpandableSection isExpanded={chartOpen} onToggle={(_event, expanded) => setChartOpen(expanded)} toggleText={chartOpen ? 'Hide comparison chart' : 'Show comparison chart'} className={styles.chartToggle}>
                 <CostComparisonChart
@@ -1182,6 +1182,7 @@ export default function HybridSavings() {
                   ownedBreakEvenTokens={comparison.ownedBreakEvenTokens}
                   rentedLowestCostTokens={comparison.rentedLowestCostTokens}
                   ownedLowestCostTokens={comparison.ownedLowestCostTokens}
+                  transitionsVerified={comparison.transitionsVerified}
                 />
               </ExpandableSection>
             </CardBody>
