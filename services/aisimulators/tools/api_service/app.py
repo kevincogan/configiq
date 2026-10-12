@@ -629,7 +629,7 @@ def _aisimulate_prediction_config(req: EstimateRequest) -> dict[str, Any]:
                 "cached_prefix_tokens": req.prefix,
             },
             "load": {"type": "concurrency", "concurrency": req.batch_size},
-            "stop": {"requests": 1},
+            "stop": {"requests_per_load_unit": 10.0},
         },
         "engine": {
             "mode": mode,
