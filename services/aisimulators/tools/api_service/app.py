@@ -175,7 +175,7 @@ class EstimateRequest(BaseModel):
     )
 
     model_config = {"populate_by_name": True}
-    estimator_backend: str = Field(default="aisimulate", description="Estimator backend to use.")
+    estimator_backend: Literal["aisimulate", "blis"] = Field(default="aisimulate", description="Estimator backend to use.")
 
 
 class MemoryBreakdown(BaseModel):
@@ -1349,12 +1349,13 @@ def _blis_estimate(req: EstimateRequest) -> _PredictionResult:
         )
 
     _validate_inputs(
-        model_path=req.model_path,
         hardware=hardware,
         tp=req.tp_size,
         isl=req.isl,
         osl=req.osl,
         concurrency=req.batch_size,
+        max_seq_len=req.max_seq_len,
+        prefix=req.prefix,
     )
 
     blis_binary = _resolve_blis_binary()
@@ -1463,7 +1464,7 @@ def _sanitize_blis_model_arg(model_path: str) -> str:
 
 def _require_int_in_range(name: str, value: int, *, min_value: int, max_value: int) -> int:
     if not isinstance(value, int):
-        raise ValueError(f"{name} must be an integer")
+        raise TypeError(f"{name} must be an integer")
     if value < min_value or value > max_value:
         raise ValueError(f"{name} must be between {min_value} and {max_value}")
     return value
@@ -1483,7 +1484,6 @@ def _run_blis(
 ) -> dict[str, Any] | None:
 
     _validate_inputs(
-        model_path=model_path,
         hardware=hardware,
         tp=tp,
         isl=isl,
