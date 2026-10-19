@@ -611,6 +611,12 @@ components:
           type: integer
           description: Batch size (max concurrent requests).
           default: 128
+        requests_per_load_unit:
+          type: number
+          nullable: true
+          exclusiveMinimum: 0
+          description: Optional simulated requests per concurrency slot. When omitted, the simulation stops after one total request.
+          default: null
         database_mode:
           type: string
           description: Performance database mode.
