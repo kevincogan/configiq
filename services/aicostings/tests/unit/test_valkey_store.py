@@ -104,6 +104,26 @@ class TestGpuIdMapping:
         assert store.get_gpu_id_mapping() is None
 
 
+class TestCompleteOffers:
+    def test_provider_replacement_is_independent_and_expiry_does_not_erase_history(self, store: ValkeyStore):
+        store.set_offer_snapshot("aws", {"offers": [{"id": "removed"}]})
+        store.set_offer_snapshot("coreweave", {"offers": [{"id": "unaffected"}]})
+        store.set_offer_snapshot("aws", {"offers": [{"id": "replacement"}]})
+        assert store.get_offer_snapshots() == {
+            "aws": {"offers": [{"id": "replacement"}]},
+            "coreweave": {"offers": [{"id": "unaffected"}]},
+        }
+        store._mark_scrape("offers.aws")
+        store.client.expire("offers:rented:aws", 0)
+        assert "aws" not in store.get_offer_snapshots()
+        assert "offers.aws" in store.get_scrape_times()
+
+    def test_curated_reload_preserves_price_provenance(self, store: ValkeyStore):
+        data = {"source": {"price_date": "2026-09-01", "retrieved_at": None}}
+        store.set_curated_offers(data)
+        assert store.get_curated_offers() == data
+
+
 class TestStaleness:
     def test_stale_when_never_scraped(self, store: ValkeyStore):
         assert store.is_stale("models", 3600) is True

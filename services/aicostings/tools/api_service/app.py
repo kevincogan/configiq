@@ -8,6 +8,7 @@ See docs/api/openapi.yaml for the full spec.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -22,9 +23,11 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .offers import OffersResponse, assemble_offers, load_curated_offers
 from .scrapers.cloud_rates import scrape_all_cloud_rates
 from .scrapers.hardware_costs import load_hardware_costs
 from .scrapers.models import LITELLM_URL, OPENROUTER_URL, scrape_all_models
+from .scrapers.offer_collectors import scrape_coreweave_offers, snapshot_from_rates
 from .valkey import ValkeyStore
 
 # Optional observability + MCP, provided by the shared configiq package
@@ -124,8 +127,31 @@ async def job_scrape_models() -> None:
 async def job_scrape_cloud_rates() -> None:
     logger.info("Scraping cloud GPU rates...")
     start = time.monotonic()
+    def publish_offers(provider, records):
+        try:
+            store.set_offer_snapshot(provider, snapshot_from_rates(provider, records))
+            store._mark_scrape(f"offers.{provider}")
+        except Exception as error:
+            # Do not let a new view break the existing aggregate-price job.
+            # Exception messages from authenticated clients can contain URLs
+            # with credentials; expose only a safe type, never the raw text.
+            store.set_scrape_error(f"offers.{provider}", f"Offer validation failed ({type(error).__name__}).")
     async with aiohttp.ClientSession() as session:
-        rates_by_system, provider_errors = await scrape_all_cloud_rates(session)
+        async def refresh_coreweave():
+            try:
+                store.set_offer_snapshot("coreweave", await scrape_coreweave_offers(session))
+                store._mark_scrape("offers.coreweave")
+            except Exception as error:
+                store.set_scrape_error("offers.coreweave", f"Collection failed ({type(error).__name__}); check provider markup.")
+
+        coreweave = asyncio.create_task(refresh_coreweave())
+        try:
+            rates_by_system, provider_errors = await scrape_all_cloud_rates(session, publish_offers=publish_offers)
+            await coreweave
+        finally:
+            if not coreweave.done():
+                coreweave.cancel()
+                await asyncio.gather(coreweave, return_exceptions=True)
     for system_id, rates in rates_by_system.items():
         store.set_cloud_rates(system_id, {
             "cloud_rates": rates,
@@ -138,6 +164,8 @@ async def job_scrape_cloud_rates() -> None:
             store._mark_scrape(source_key)
         else:
             store.set_scrape_error(source_key, str(error))
+            if provider in {"aws", "azure", "gcp"}:
+                store.set_scrape_error(f"offers.{provider}", f"Collection failed ({type(error).__name__}).")
     error_count = sum(1 for e in provider_errors.values() if e is not None)
     logger.info("Stored cloud rates for %d systems (%d provider errors)",
                 len(rates_by_system), error_count)
@@ -149,6 +177,12 @@ async def job_load_hardware_costs() -> None:
     logger.info("Loading hardware costs from seed data...")
     start = time.monotonic()
     costs = load_hardware_costs()
+    try:
+        curated = load_curated_offers()
+        store.set_curated_offers(curated.model_dump(mode="json"))
+        store._mark_scrape("offers.curated")
+    except Exception as error:
+        store.set_scrape_error("offers.curated", f"Catalogue validation failed ({type(error).__name__}).")
     for system_id, cost in costs.items():
         store.set_hardware_cost(system_id, {
             **cost,
@@ -177,23 +211,21 @@ async def lifespan(app: FastAPI):
     global _DEVICE_DISPLAY_NAMES
     _DEVICE_DISPLAY_NAMES = load_device_names_from_perf_data()
 
-    # Unconditionally refresh all datasets on startup. This ensures fresh data
-    # after every container restart, avoiding edge cases where data TTL expires
-    # between restart and scheduler's first job run. Startup latency (30-40s)
-    # is acceptable; restarts are infrequent. Failures are logged but don't
-    # block startup — the scheduler will retry within 24h and /health reports staleness.
-    try:
-        await job_scrape_models()
-    except Exception as e:
-        logger.error("Startup scrape_models failed: %s", e)
-    try:
-        await job_scrape_cloud_rates()
-    except Exception as e:
-        logger.error("Startup scrape_cloud_rates failed: %s", e)
+    # Local validation is fast; provider I/O is not. Serve the existing cache
+    # and explicitly curated estimates while public catalogues refresh, rather
+    # than blocking every endpoint behind an AWS bulk download (up to 600s).
     try:
         await job_load_hardware_costs()
     except Exception as e:
         logger.error("Startup load_hardware_costs failed: %s", e)
+
+    async def refresh_providers():
+        results = await asyncio.gather(job_scrape_models(), job_scrape_cloud_rates(), return_exceptions=True)
+        for name, result in zip(("models", "cloud_rates"), results):
+            if isinstance(result, Exception):
+                logger.error("Startup %s refresh failed (%s)", name, type(result).__name__)
+
+    initial_refresh = asyncio.create_task(refresh_providers())
 
     # Start scheduler for periodic refreshes
     scheduler = AsyncIOScheduler()
@@ -203,10 +235,13 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     logger.info("Scheduler started")
 
-    yield
-
-    scheduler.shutdown()
-    store.close()
+    try:
+        yield
+    finally:
+        scheduler.shutdown()
+        initial_refresh.cancel()
+        await asyncio.gather(initial_refresh, return_exceptions=True)
+        store.close()
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -372,6 +407,8 @@ def get_systems(
                 "new_usd": hw.get("new_usd"),
                 "new_usd_low": hw.get("new_usd_low"),
                 "new_usd_high": hw.get("new_usd_high"),
+                "new_node_usd": hw.get("new_node_usd"),
+                "install_cost_node": hw.get("install_cost_node"),
                 "used_usd": hw.get("used_usd"),
                 "indicative": True,
                 "source_label": hw.get("source_label"),
@@ -385,6 +422,24 @@ def get_systems(
         systems.append(entry)
 
     return {"systems": systems}
+
+
+@app.get("/offers", response_model=OffersResponse)
+def get_offers():
+    """Complete-instance and complete-server prices, with per-source provenance.
+
+    Legacy /systems prices retain their per-GPU meanings. This endpoint does
+    not call providers at request time and does not expose private quotes.
+    """
+    snapshots = store.get_offer_snapshots()
+    errors = store.get_scrape_errors()
+    # Last-success markers outlive the bounded last-good cache. Expiration
+    # must not resurrect a previously superseded seed price as a fallback.
+    for source in store.get_scrape_times():
+        provider = source.removeprefix("offers.")
+        if source.startswith("offers.") and provider in {"aws", "azure", "coreweave", "gcp"} and provider not in snapshots:
+            errors.setdefault(source, {"message": "Collected snapshot expired."})
+    return assemble_offers(store.get_curated_offers(), snapshots, errors)
 
 
 @app.get("/health")
