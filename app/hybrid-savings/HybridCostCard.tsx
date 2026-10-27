@@ -50,6 +50,9 @@ export function HybridCostCard({
   const priceSource = option?.key === 'rented' ? candidate?.cloudPriceSource : candidate?.purchasePriceSource
   const priceSourceUrl = option?.key === 'rented' ? candidate?.cloudPriceSourceUrl : candidate?.purchasePriceSourceUrl
   const priceDate = option?.key === 'rented' ? candidate?.cloudPriceSourceDate : candidate?.purchasePriceSourceDate
+  const collectionKind = option?.key === 'rented' ? candidate?.cloudPriceCollectionKind : candidate?.purchasePriceCollectionKind
+  const retrievedAt = option?.key === 'rented' ? candidate?.cloudPriceRetrievedAt : candidate?.purchasePriceRetrievedAt
+  const priceStale = option?.key === 'rented' ? candidate?.cloudPriceStale : candidate?.purchasePriceStale
 
   React.useLayoutEffect(() => {
     if (frontRef.current) frontRef.current.inert = isFlipped
@@ -106,7 +109,9 @@ export function HybridCostCard({
             </dl>
             {candidate && <p className={styles.costPriceSource}>
               {priceSourceUrl ? <a href={priceSourceUrl} target="_blank" rel="noreferrer" aria-label={priceSource || 'Price source'}>Price source</a> : <span>Source link unavailable</span>}
-              <span> · {priceDate ?? 'Date not supplied'}</span>
+              <span> · {collectionKind === 'automated' ? 'Automatically collected' : 'Curated estimate'}{priceStale ? ' · stale' : ''}</span>
+              {priceDate && <span> · price dated {priceDate}</span>}
+              {retrievedAt && <span> · collected {retrievedAt.slice(0, 10)}</span>}
             </p>}
             <span className={styles.costFlipHint} aria-hidden="true">↻ flip back</span>
           </div>}

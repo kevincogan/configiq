@@ -43,6 +43,7 @@ services, typically behind nginx. See [RELEASE_PROCESS.md](./RELEASE_PROCESS.md)
 | KV cache calculator | `app/kv-cache/` | `/api/memory` requests and memory breakdown display |
 | Catalog hook | `lib/hooks/useCatalog.ts` | Same-origin GPU, model, and backend catalog |
 | Costings hook | `lib/hooks/useCostings.ts` | Same-origin pricing and health data |
+| Complete offers hook | `lib/hooks/useInfrastructureOffers.ts` | Validated whole-instance/server prices; isolated from the shared pricing cache |
 | API adapters | `lib/api/` | Request shapes, response normalization, and error handling |
 | Legacy catalogs | `lib/gpu-math/` | Historical static data and types; no new sizing formulas |
 
@@ -75,9 +76,18 @@ GPU sizing formulas or call external service URLs directly from the browser.
 2. The catalog route fetches `/systems`, `/models`, and `/backends` from
    AISimulators and combines them into one browser response.
 3. When costings are enabled, `useCostings` calls `/api/costings/models`,
-   `/api/costings/systems`, and `/api/costings/health`.
+   `/api/costings/systems`, and `/api/costings/health`. Hybrid Savings uses its
+   models-only scope, omitting the legacy systems-pricing request. Caches are
+   isolated by pricing source and scope; empty/stale startup data retries after
+   one minute, while healthy data retains the usual one-hour cache lifetime.
 4. Those routes proxy the aicostings service; pricing data is not part of the
    AISimulators sizing response.
+5. Hybrid Savings separately reads `/api/costings/offers` → aicostings `/offers`.
+   The versioned feed supplies complete rental/server records and provenance,
+   replacing frontend price arrays. Price refreshes rejoin the current sizing
+   results without rerunning simulation. Missing/incompatible feeds show an
+   explicit warning, never a hidden local price fallback. Curated server and
+   uncovered rental estimates remain centralised in the backend and labelled.
 
 ## API route map
 
@@ -94,6 +104,7 @@ GPU sizing formulas or call external service URLs directly from the browser.
 | `/api/costings/systems` | GET | aicostings GPU cloud and hardware pricing |
 | `/api/costings/health` | GET | aicostings source health |
 | `/api/costings/sources` | GET | aicostings source metadata |
+| `/api/costings/offers` | GET | Versioned complete-instance/server pricing and collection status |
 | `/api/health` | GET | Application and gateway health |
 | `/api/metrics` | GET | Application metrics |
 

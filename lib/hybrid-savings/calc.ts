@@ -30,8 +30,6 @@ export interface InfrastructureCandidate {
   clusterOutputTokensPerSecond: number
   /** Whole-instance list price. Preferred over the compatibility GPU rate. */
   cloudHourlyCostPerInstance?: number | null
-  /** Offer-specific support allowance; falls back to the global assumption. */
-  cloudDirectInfrastructureMonthly?: number | null
   cloudRatePerGpuHour: number | null
   cloudGpusPerInstance?: number | null
   cloudInstanceName?: string | null
@@ -42,6 +40,9 @@ export interface InfrastructureCandidate {
   cloudPriceSource?: string | null
   cloudPriceSourceUrl?: string | null
   cloudPriceSourceDate?: string | null
+  cloudPriceCollectionKind?: 'automated' | 'curated'
+  cloudPriceRetrievedAt?: string | null
+  cloudPriceStale?: boolean
   purchaseGpusPerServer?: number | null
   purchasePricePerReplica: number | null
   purchaseInstallationPerReplica: number | null
@@ -49,6 +50,9 @@ export interface InfrastructureCandidate {
   purchasePriceSource: string | null
   purchasePriceSourceUrl: string | null
   purchasePriceSourceDate: string | null
+  purchasePriceCollectionKind?: 'automated' | 'curated'
+  purchasePriceRetrievedAt?: string | null
+  purchasePriceStale?: boolean
   tdpWattsPerGpu: number | null
 }
 
@@ -417,9 +421,7 @@ function rentedCostForCandidate(
 
   const compute = billableInstanceHours * hourlyInstanceCost
   const fixed = finiteNonNegative(assumptions.rentedFixedMonthly)
-  const directInfrastructure = finiteNonNegative(
-    candidate.cloudDirectInfrastructureMonthly ?? assumptions.rentedDirectInfrastructureMonthly,
-  )
+  const directInfrastructure = finiteNonNegative(assumptions.rentedDirectInfrastructureMonthly)
   const operations =
     finiteNonNegative(assumptions.rentedOperationsFte) *
     finiteNonNegative(assumptions.loadedMonthlyCostPerFte)

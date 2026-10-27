@@ -135,11 +135,11 @@ describe('hybrid savings calculations', () => {
     expect(result.breakdown.every(item => Number.isFinite(item.monthlyCost))).toBe(true)
   })
 
-  it('uses an offer-specific rented infrastructure allowance before the global fallback', () => {
+  it('uses the editable rented infrastructure allowance from Sources', () => {
     const priced = bestRentedAtVolume(
       workload,
-      [{ ...candidate, cloudDirectInfrastructureMonthly: 500 }],
-      { ...assumptions, rentedDirectInfrastructureMonthly: 1_800 },
+      [candidate],
+      { ...assumptions, rentedDirectInfrastructureMonthly: 500 },
       25_000_000,
     )
 
@@ -262,7 +262,6 @@ describe('hybrid savings calculations', () => {
       cloudHourlyCostPerInstance: 2.7,
       cloudRatePerGpuHour: 2.7,
       cloudGpusPerInstance: 1,
-      cloudDirectInfrastructureMonthly: 500,
       purchaseGpusPerServer: 1,
       purchasePricePerReplica: 34_000,
       purchaseInstallationPerReplica: 2_400,
@@ -282,6 +281,7 @@ describe('hybrid savings calculations', () => {
       loadedMonthlyCostPerFte: 18_000,
       hostedOperationsFte: 0.05,
       hostedImplementation: 15_000,
+      rentedDirectInfrastructureMonthly: 500,
       rentedOperationsFte: 0.2,
       rentedImplementation: 40_000,
       ownedOperationsFte: 0.25,

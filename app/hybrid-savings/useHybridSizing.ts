@@ -7,6 +7,7 @@ import type { GpuOption } from '@/lib/hooks/useCatalog'
 import type { InfrastructureCandidate } from '@/lib/hybrid-savings/calc'
 import { resolveRentedCloudOffers, type RentedCloudOffer } from '@/lib/hybrid-savings/cloud-offer-catalog'
 import { resolveCompatibleServerPurchaseConfigurations, type ServerPurchaseConfiguration } from '@/lib/hybrid-savings/purchase-catalog'
+import type { InfrastructureOffers } from '@/lib/api/infrastructure-offers'
 
 function candidateFromResult(
   result: RecommendResult,
@@ -15,14 +16,13 @@ function candidateFromResult(
   purchaseConfiguration: ServerPurchaseConfiguration | null,
 ): InfrastructureCandidate {
   return {
-    configurationId: cloudOffer?.id ?? (purchaseConfiguration ? `${gpu.systemId}:server:${purchaseConfiguration.gpuCount}` : undefined),
+    configurationId: cloudOffer?.id ?? purchaseConfiguration?.id,
     systemId: gpu.systemId,
     label: gpu.label,
     gpusPerReplica: result.recommendation.gpusPerReplica,
     replicasNeeded: result.recommendation.replicasNeeded,
     clusterOutputTokensPerSecond: result.throughput.tokensPerSecond,
     cloudHourlyCostPerInstance: cloudOffer?.hourlyCost ?? null,
-    cloudDirectInfrastructureMonthly: cloudOffer?.directInfrastructureMonthly ?? null,
     cloudRatePerGpuHour: cloudOffer
       ? cloudOffer.hourlyCost / cloudOffer.gpuCount
       : null,
@@ -35,6 +35,9 @@ function candidateFromResult(
     cloudPriceSource: cloudOffer?.sourceLabel ?? null,
     cloudPriceSourceUrl: cloudOffer?.sourceUrl ?? null,
     cloudPriceSourceDate: cloudOffer?.sourceDate ?? null,
+    cloudPriceCollectionKind: cloudOffer?.collectionKind,
+    cloudPriceRetrievedAt: cloudOffer?.retrievedAt,
+    cloudPriceStale: cloudOffer?.stale,
     purchaseGpusPerServer: purchaseConfiguration?.gpuCount ?? null,
     purchasePricePerReplica: purchaseConfiguration?.purchasePrice ?? null,
     purchaseInstallationPerReplica: purchaseConfiguration?.installationCost ?? null,
@@ -42,6 +45,9 @@ function candidateFromResult(
     purchasePriceSource: purchaseConfiguration?.sourceLabel ?? null,
     purchasePriceSourceUrl: purchaseConfiguration?.sourceUrl ?? null,
     purchasePriceSourceDate: purchaseConfiguration?.sourceDate ?? null,
+    purchasePriceCollectionKind: purchaseConfiguration?.collectionKind,
+    purchasePriceRetrievedAt: purchaseConfiguration?.retrievedAt,
+    purchasePriceStale: purchaseConfiguration?.stale,
     tdpWattsPerGpu: gpu.tdpWatts,
   }
 }
@@ -57,13 +63,20 @@ interface SizingInput {
   targetConcurrency: number
   prefixTokens: number
   gpuOptions: GpuOption[]
-  preferredCloudProvider: string | null
   modelConfig?: Record<string, unknown>
 }
 
 /** Four concurrent live searches; only the current, uncancelled run may publish results. */
-export function useHybridSizing() {
-  const [candidates, setCandidates] = React.useState<InfrastructureCandidate[]>([])
+export function useHybridSizing(offers: InfrastructureOffers, preferredCloudProvider: string | null) {
+  const [sized, setSized] = React.useState<{ result: RecommendResult; gpu: GpuOption }[]>([])
+  // Pricing can refresh without re-running simulation or mixing model results.
+  const candidates = React.useMemo(() => sized.flatMap(({ result, gpu }) => {
+    const cloud = resolveRentedCloudOffers(offers.rented, gpu.systemId, preferredCloudProvider)
+    const purchases = resolveCompatibleServerPurchaseConfigurations(offers.purchased, gpu.systemId, result.recommendation.gpusPerReplica)
+    const priced = [...cloud.map(offer => candidateFromResult(result, gpu, offer, null)),
+      ...purchases.map(server => candidateFromResult(result, gpu, null, server))]
+    return priced.length ? priced : [candidateFromResult(result, gpu, null, null)]
+  }), [sized, offers.rented, offers.purchased, preferredCloudProvider])
   const [isSizing, setIsSizing] = React.useState(false)
   const [progress, setProgress] = React.useState({ completed: 0, total: 0 })
   const [sizingError, setSizingError] = React.useState<string | null>(null)
@@ -89,13 +102,13 @@ export function useHybridSizing() {
     abortRef.current = controller
     const runId = ++runIdRef.current
     const current = () => !controller.signal.aborted && runIdRef.current === runId
-    const results: InfrastructureCandidate[] = []
+    const results: { result: RecommendResult; gpu: GpuOption }[] = []
     let failures = 0
     let nextIndex = 0
 
     setIsSizing(true)
     setSizingError(null)
-    setCandidates([])
+    setSized([])
     setLastSizingSignature(null)
     setFailedSystems(0)
     setProgress({ completed: 0, total: input.gpuOptions.length })
@@ -129,14 +142,7 @@ export function useHybridSizing() {
             failures += 1
             continue
           }
-          const cloudOffers = resolveRentedCloudOffers(gpu.systemId, input.preferredCloudProvider)
-          const purchases = resolveCompatibleServerPurchaseConfigurations(gpu.systemId, data.recommendation.gpusPerReplica)
-          results.push(...cloudOffers.map(offer => candidateFromResult(data, gpu, offer, null)))
-          results.push(...purchases.map(server => candidateFromResult(data, gpu, null, server)))
-          // Retain unpriced successes for honest sizing/coverage diagnostics.
-          if (cloudOffers.length === 0 && purchases.length === 0) {
-            results.push(candidateFromResult(data, gpu, null, null))
-          }
+          results.push({ result: data, gpu })
         } catch {
           if (!current()) return
           failures += 1
@@ -148,7 +154,7 @@ export function useHybridSizing() {
 
     await Promise.all(Array.from({ length: Math.min(4, input.gpuOptions.length) }, worker))
     if (!current()) return
-    setCandidates(results)
+    setSized(results)
     setFailedSystems(failures)
     setLastSizingSignature(input.signature)
     setIsSizing(false)

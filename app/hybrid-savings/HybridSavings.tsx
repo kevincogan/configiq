@@ -27,6 +27,7 @@ import { AppliedCostAssumptions } from './AppliedCostAssumptions'
 import { useHybridSizing } from './useHybridSizing'
 import { useSettings } from '@/contexts/SettingsContext'
 import { useCatalog } from '@/lib/hooks/useCatalog'
+import { useInfrastructureOffers } from '@/lib/hooks/useInfrastructureOffers'
 import { getAppConfig } from '@/lib/app-config'
 import { DEFAULT_WORKLOAD, type WorkloadPreset } from '@/lib/workload-presets'
 import {
@@ -86,8 +87,7 @@ function collectionDate(value: string | null | undefined, fallback = 'Not suppli
 }
 function collectionLabel(source: string): string {
   const labels: Record<string, string> = {
-    'cloud.aws': 'AWS', 'cloud.azure': 'Azure', 'cloud.vastai': 'Vast.ai',
-    hardware_costs: 'Hardware prices', 'models.litellm': 'LiteLLM', 'models.openrouter': 'OpenRouter',
+    'models.litellm': 'LiteLLM', 'models.openrouter': 'OpenRouter',
   }
   return labels[source] ?? source
 }
@@ -205,14 +205,16 @@ export default function HybridSavings() {
     isLoading: catalogLoading,
     error: catalogError,
   } = useCatalog()
-  const costings = useCostings(costingsEnabled, pricingSource)
-  const staleCostingSources = React.useMemo(
+  const costings = useCostings(costingsEnabled, pricingSource, 'models')
+  const infrastructure = useInfrastructureOffers(costingsEnabled)
+  const hostedSources = React.useMemo(
     () => Object.entries(costings.health?.sources ?? {})
-      .filter(([, status]) => status.stale)
-      .map(([source]) => source),
-    [costings.health],
+      .filter(([source]) => pricingSource === 'merged' ? source.startsWith('models.') : source === `models.${pricingSource}`),
+    [costings.health, pricingSource],
   )
-  const costingInputsStale = costings.modelsStale || staleCostingSources.length > 0
+  const staleCostingSources = hostedSources.filter(([, status]) => status.stale).map(([source]) => source)
+  const costingInputsStale = costings.modelsStale || staleCostingSources.length > 0 || infrastructure.stale ||
+    infrastructure.rented.some(offer => offer.stale) || infrastructure.purchased.some(offer => offer.stale)
 
   const [model, setModel] = React.useState('')
   const [profileId, setProfileId] = React.useState(DEFAULT_WORKLOAD.key)
@@ -234,12 +236,13 @@ export default function HybridSavings() {
   }), [planningAssumptions, costLens, cloudBillingMode])
   const [rentedSelection, setRentedSelection] = React.useState<string | null>(null)
   const [ownedSelection, setOwnedSelection] = React.useState<string | null>(null)
+  const [selectionNotice, setSelectionNotice] = React.useState<string | null>(null)
   const [selectedHostedOfferKey, setSelectedHostedOfferKey] = React.useState<string | null>(null)
   const [apiModel, setApiModel] = React.useState(SAME_API_MODEL)
   const [workloadAdvancedOpen, setWorkloadAdvancedOpen] = React.useState(false)
   const [chartOpen, setChartOpen] = React.useState(false)
   const [calculationDetailsOpen, setCalculationDetailsOpen] = React.useState(false)
-  const { candidates, isSizing, progress, sizingError, failedSystems, lastSizingSignature, runSizing: sizeConfigurations, cancel } = useHybridSizing()
+  const { candidates, isSizing, progress, sizingError, failedSystems, lastSizingSignature, runSizing: sizeConfigurations, cancel } = useHybridSizing(infrastructure, preferredCloudProvider)
   const [modelConfig, setModelConfig] = React.useState<{ model: string; config: Record<string, unknown> } | null>(null)
   const [configLoading, setConfigLoading] = React.useState(false)
   const [configError, setConfigError] = React.useState<string | null>(null)
@@ -356,17 +359,23 @@ export default function HybridSavings() {
   const ownedOptions = React.useMemo(() => infrastructureOptionsAtVolume('owned', workload, candidates, assumptions, facts.monthlyTokens), [workload, candidates, assumptions, facts.monthlyTokens])
   React.useEffect(() => {
     // Do not erase a valid manual choice while a new sizing run is in progress.
-    if (isSizing || isStale || lastSizingSignature === null) return
-    if (rentedSelection && !rentedOptions.some(option => option.candidate && infrastructureCandidateKey(option.candidate, 'rented') === rentedSelection)) setRentedSelection(null)
-    if (ownedSelection && !ownedOptions.some(option => option.candidate && infrastructureCandidateKey(option.candidate, 'owned') === ownedSelection)) setOwnedSelection(null)
-  }, [isSizing, isStale, lastSizingSignature, rentedSelection, ownedSelection, rentedOptions, ownedOptions])
+    if (isSizing || isStale || infrastructure.isLoading || lastSizingSignature === null) return
+    if (rentedSelection && !rentedOptions.some(option => option.candidate && infrastructureCandidateKey(option.candidate, 'rented') === rentedSelection)) {
+      setRentedSelection(null)
+      setSelectionNotice('The selected rented offer is no longer eligible. Returned to automatic selection.')
+    }
+    if (ownedSelection && !ownedOptions.some(option => option.candidate && infrastructureCandidateKey(option.candidate, 'owned') === ownedSelection)) {
+      setOwnedSelection(null)
+      setSelectionNotice('The selected server configuration is no longer eligible. Returned to automatic selection.')
+    }
+  }, [isSizing, isStale, infrastructure.isLoading, lastSizingSignature, rentedSelection, ownedSelection, rentedOptions, ownedOptions])
 
   const rentedReadyGpus = React.useMemo(() => gpuOptions.filter(gpu => (
-    hasRentedCloudOffer(gpu.systemId)
-  )), [gpuOptions])
+    hasRentedCloudOffer(infrastructure.rented, gpu.systemId)
+  )), [gpuOptions, infrastructure.rented])
   const purchaseReadyGpus = React.useMemo(() => gpuOptions.filter(gpu => (
-    hasServerPurchaseConfiguration(gpu.systemId)
-  )), [gpuOptions])
+    hasServerPurchaseConfiguration(infrastructure.purchased, gpu.systemId)
+  )), [gpuOptions, infrastructure.purchased])
   const priceReadyGpus = React.useMemo(() => gpuOptions.filter(gpu => (
     rentedReadyGpus.some(candidate => candidate.systemId === gpu.systemId) ||
     purchaseReadyGpus.some(candidate => candidate.systemId === gpu.systemId)
@@ -391,7 +400,7 @@ export default function HybridSavings() {
     signature: sizingSignature, model, backend: inferenceBackend,
     averageInputTokens, averageOutputTokens, targetTtftMs, targetTpotMs,
     targetConcurrency, prefixTokens,
-    gpuOptions, preferredCloudProvider,
+    gpuOptions,
     ...(modelConfig?.model === model ? { modelConfig: modelConfig.config } : {}),
   })
 
@@ -451,6 +460,11 @@ export default function HybridSavings() {
           {catalogError ?? costings.error}. Refresh the page or check the Sources page before using the result.
         </Alert>
       )}
+      {(infrastructure.error || infrastructure.rejectedRecords > 0) && <Alert title="Infrastructure pricing needs attention" variant="warning" isInline>
+        {infrastructure.error ?? `${infrastructure.rejectedRecords} incomplete or duplicate pricing records were excluded.`}
+        {infrastructure.stale && ' Showing the last successfully loaded snapshot; prices may be stale.'}
+      </Alert>}
+      {selectionNotice && <Alert title="Hardware selection updated" variant="info" isInline>{selectionNotice}</Alert>}
 
       <Form onSubmit={event => { event.preventDefault(); if (canCalculate) void runSizing() }}>
         <Card className={styles.inputCard}>
@@ -581,9 +595,9 @@ export default function HybridSavings() {
               </dl>
             </HybridCostCard>
             <HybridCostCard title="Rented GPU" option={rentedOption} cheapest={comparison.cheapest?.key === 'rented'} lens={assumptions.costLens}
-              unavailable="No sized configuration has an eligible complete cloud offer."
+              unavailable={infrastructure.isLoading ? 'Loading complete instance prices…' : 'No sized configuration has an eligible complete cloud offer.'}
               selector={<ComboBox id="hybrid-rented-configuration" label="Hardware configuration" portalMenu preserveOrder
-                value={rentedSelection ?? ''} onChange={value => setRentedSelection(value || null)}
+                value={rentedSelection ?? ''} onChange={value => { setRentedSelection(value || null); setSelectionNotice(null) }}
                 items={[
                   { value: '', label: `Automatic · ${rentedOptions[0]?.candidate?.cloudGpusPerInstance ?? 1} × ${rentedOptions[0]?.candidate?.label ?? ''}`, group: '', description: 'Cheapest eligible configuration' },
                   ...rentedOptions.flatMap(option => option.candidate ? [{ value: infrastructureCandidateKey(option.candidate, 'rented'),
@@ -596,9 +610,9 @@ export default function HybridSavings() {
               </dl>
             </HybridCostCard>
             <HybridCostCard title="Purchased hardware" option={ownedOption} cheapest={comparison.cheapest?.key === 'owned'} lens={assumptions.costLens}
-              unavailable="No sized configuration has an eligible complete-server purchase price."
+              unavailable={infrastructure.isLoading ? 'Loading complete-server prices…' : 'No sized configuration has an eligible complete-server purchase price.'}
               selector={<ComboBox id="hybrid-owned-configuration" label="Hardware configuration" portalMenu preserveOrder
-                value={ownedSelection ?? ''} onChange={value => setOwnedSelection(value || null)}
+                value={ownedSelection ?? ''} onChange={value => { setOwnedSelection(value || null); setSelectionNotice(null) }}
                 items={[
                   { value: '', label: `Automatic · ${ownedOptions[0]?.candidate?.purchaseGpusPerServer ?? ownedOptions[0]?.candidate?.gpusPerReplica ?? 1} × ${ownedOptions[0]?.candidate?.label ?? ''} server`, group: '', description: 'Cheapest eligible configuration' },
                   ...ownedOptions.flatMap(option => option.candidate ? [{ value: infrastructureCandidateKey(option.candidate, 'owned'),
@@ -678,16 +692,21 @@ export default function HybridSavings() {
                   <div><dt>Offer updated</dt><dd>{collectionDate(hostedModel.updated_at)}</dd></div>
                 </>}
                 <div><dt>Hosted feed updated</dt><dd>{collectionDate(costings.modelsUpdatedAt)}</dd></div>
+                <div><dt>Infrastructure prices</dt><dd>Complete-offers API · {infrastructure.rented.length} rental offers · {infrastructure.purchased.length} server configurations</dd></div>
+                <div><dt>Restricted rental rates</dt><dd>{infrastructure.rented.filter(offer => offer.eligibility !== 'standard').length} inference-platform-only offers excluded from general rental selection</dd></div>
+                {Object.entries(infrastructure.sources).map(([source, status]) => <div key={source}>
+                  <dt>{source} collection</dt><dd>{status.state}{status.message && ` · ${status.message}`}</dd>
+                </div>)}
                 {costings.health && <>
-                  <div><dt>Tracked sources</dt><dd>{Object.keys(costings.health.sources).length}</dd></div>
+                  <div><dt>Tracked hosted sources</dt><dd>{hostedSources.length}</dd></div>
                   <div><dt>Stale sources</dt><dd>{staleCostingSources.map(collectionLabel).join(', ') || 'None reported'}</dd></div>
-                  <div><dt>Refresh failures</dt><dd>{Object.entries(costings.health.sources).filter(([, status]) => status.last_error).map(([source]) => collectionLabel(source)).join(', ') || 'None reported'}</dd></div>
+                  <div><dt>Refresh failures</dt><dd>{hostedSources.filter(([, status]) => status.last_error).map(([source]) => collectionLabel(source)).join(', ') || 'None reported'}</dd></div>
                 </>}
               </dl>
               <Link className={styles.sourceDetailsLink} href="/sources">View source collection times</Link>
             </section>
             </div>
-            <p className={styles.calculationNote}>Freshness describes collection, not a price’s effective date. Cloud and server prices are dated catalogue records, not live quotes; each flip card includes its price source and date.</p>
+            <p className={styles.calculationNote}>Freshness describes collection, not a price’s effective date. Automatically collected prices and curated estimates are identified on each flip card. Catalogue prices are not commercial quotes.</p>
           </section>
         </ExpandableSection>
       </CardBody></Card>

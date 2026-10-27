@@ -7,6 +7,7 @@ import type { GpuOption } from '@/lib/hooks/useCatalog'
 import type { RecommendResponse } from '@/lib/api/recommend'
 import { readRecommendStream } from '@/lib/api/recommend-stream'
 import { useHybridSizing } from './useHybridSizing'
+import { TEST_OFFERS } from '@/lib/hybrid-savings/__fixtures__/offers'
 
 vi.mock('@/lib/api/recommend-stream', () => ({ readRecommendStream: vi.fn() }))
 
@@ -32,7 +33,7 @@ let hook: ReturnType<typeof useHybridSizing>
 let host: HTMLDivElement
 const fetchMock = vi.fn<typeof fetch>()
 function Harness() {
-  const next = useHybridSizing()
+  const next = useHybridSizing(TEST_OFFERS, null)
   React.useEffect(() => { hook = next })
   return null
 }

@@ -6,6 +6,8 @@ import HybridSavings from './HybridSavings'
 import HybridSavingsPage from './page'
 import { useSettings } from '@/contexts/SettingsContext'
 import { useCostings } from '@/lib/hooks/useCostings'
+import { useInfrastructureOffers } from '@/lib/hooks/useInfrastructureOffers'
+import { TEST_OFFERS } from '@/lib/hybrid-savings/__fixtures__/offers'
 import { readRecommendStream } from '@/lib/api/recommend-stream'
 import { fetchModelConfig, type FetchResult } from '@/lib/huggingface/fetch-config'
 import type { RecommendResponse } from '@/lib/api/recommend'
@@ -17,6 +19,7 @@ import CostAssumptionsEditor from '@/app/sources/CostAssumptionsEditor'
 
 vi.mock('@/contexts/SettingsContext', () => ({ useSettings: vi.fn() }))
 vi.mock('@/lib/hooks/useCostings', () => ({ useCostings: vi.fn() }))
+vi.mock('@/lib/hooks/useInfrastructureOffers', () => ({ useInfrastructureOffers: vi.fn() }))
 vi.mock('@/lib/api/recommend-stream', () => ({ readRecommendStream: vi.fn() }))
 vi.mock('@/lib/huggingface/fetch-config', () => ({ fetchModelConfig: vi.fn() }))
 vi.mock('@/lib/app-config', () => ({ getAppConfig: () => appConfig }))
@@ -36,6 +39,7 @@ const sizing = {
 } as RecommendResponse
 beforeEach(async () => {
   localStorage.clear()
+  vi.mocked(useInfrastructureOffers).mockReturnValue({ ...TEST_OFFERS, isLoading: false, error: null, stale: false })
   vi.mocked(fetchModelConfig).mockReset()
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
   vi.mocked(useCatalog).mockReturnValue({
@@ -165,6 +169,61 @@ describe('Hybrid model configuration readiness', () => {
 })
 
 describe('Hybrid page composition', () => {
+  it('requests only hosted pricing and ignores legacy infrastructure health in its comparison', async () => {
+    vi.mocked(useCostings).mockReturnValue({ ...vi.mocked(useCostings)(true), health: {
+      status: 'ok', version: 'test', sources: {
+        'models.openrouter': { last_success: null, stale: false, last_error: null },
+        'hardware_costs': { last_success: null, stale: true, last_error: { at: 'now', message: 'Old seed data' } },
+        'cloud.aws': { last_success: null, stale: true, last_error: { at: 'now', message: 'Legacy rates' } },
+      },
+    } })
+    await render()
+    expect(useCostings).toHaveBeenCalledWith(true, 'merged', 'models')
+    expect(host.textContent).not.toContain('Some pricing inputs are stale')
+    await click('Data and assumptions')
+    const prices = host.querySelector('[aria-labelledby="hybrid-pricing-details-heading"]')!
+    expect(prices.textContent).toContain('Tracked hosted sources1')
+    expect(prices.textContent).toContain('Refresh failuresNone reported')
+  })
+
+  it('refreshes API prices in cards and chart without re-sizing or resetting a valid hardware choice', async () => {
+    await render(); await click('Calculate'); await click('Cost vs workload (break-even analysis)')
+    await chooseComboOption('hybrid-rented-configuration', 'EC2 g6e.xlarge')
+    const choice = host.querySelector<HTMLInputElement>('#hybrid-rented-configuration')!.value
+    const chart = host.querySelector('[data-testid="chart"]')!.textContent
+    const calls = vi.mocked(readRecommendStream).mock.calls.length
+    vi.mocked(useInfrastructureOffers).mockReturnValue({ ...TEST_OFFERS, isLoading: false, error: null, stale: false,
+      rented: TEST_OFFERS.rented.map(offer => ({ ...offer, hourlyCost: offer.hourlyCost * 2 })) })
+    await render()
+    expect(host.querySelector<HTMLInputElement>('#hybrid-rented-configuration')!.value).toBe(choice)
+    expect(host.querySelector('[data-testid="chart"]')!.textContent).not.toBe(chart)
+    expect(vi.mocked(readRecommendStream).mock.calls.length).toBe(calls)
+  })
+
+  it('keeps hosted comparison usable if the offers endpoint is unavailable, without local price fallback', async () => {
+    vi.mocked(useInfrastructureOffers).mockReturnValue({ rented: [], purchased: [], sources: {}, rejectedRecords: 0,
+      isLoading: false, error: 'Complete-offers API upgrade required', stale: false })
+    await render(); await click('Calculate')
+    expect(host.textContent).toContain('Complete-offers API upgrade required')
+    expect(host.textContent).toContain('No sized configuration has an eligible complete cloud offer')
+    expect(host.querySelector('#hybrid-hosted-provider')).not.toBeNull()
+    expect(host.querySelector('#hybrid-rented-configuration')).toBeNull()
+    expect(host.querySelector('#hybrid-owned-configuration')).toBeNull()
+  })
+
+  it('explains a removed offer and keeps other comparison paths working', async () => {
+    await render(); await click('Calculate')
+    await chooseComboOption('hybrid-rented-configuration', 'EC2 g6e.xlarge')
+    const calls = vi.mocked(readRecommendStream).mock.calls.length
+    vi.mocked(useInfrastructureOffers).mockReturnValue({ ...TEST_OFFERS, isLoading: false, error: null, stale: false,
+      rented: TEST_OFFERS.rented.filter(offer => offer.id !== 'aws-g6e-xlarge') })
+    await render()
+    expect(host.textContent).toContain('selected rented offer is no longer eligible')
+    expect(host.querySelector<HTMLInputElement>('#hybrid-rented-configuration')!.value).toContain('Automatic')
+    expect(host.querySelector('#hybrid-owned-configuration')).not.toBeNull()
+    expect(vi.mocked(readRecommendStream).mock.calls.length).toBe(calls)
+  })
+
   it('keeps the default API model label linked to the model selected above', async () => {
     await render(); await click('Calculate')
     expect(host.querySelector<HTMLInputElement>('#hybrid-api-model')!.value).toBe('Qwen/Qwen3-8B')
@@ -392,8 +451,8 @@ describe('Hybrid page composition', () => {
     }
     expect(sections[2].textContent).toContain('1 concurrent request')
     expect(sections[2].textContent).toContain('2 models · 1 GPU systems')
-    expect(sections[2].textContent).toContain('not live quotes')
-    expect(sections[1].textContent).toContain('Catalogue allowance — replaces the Sources fallback')
+    expect(sections[2].textContent).toContain('not commercial quotes')
+    expect(sections[1].textContent).toContain('Planning allowance from Sources; not a provider charge.')
     expect(sections[1].textContent).not.toContain('Complete server price')
     expect(host.querySelectorAll('#hybrid-calculation-details button, #hybrid-calculation-details summary')).toHaveLength(0)
     expect([...host.querySelectorAll('[class*="costValue"]')].map(element => element.textContent)).toEqual(costs)
@@ -410,12 +469,12 @@ describe('Hybrid page composition', () => {
       models, modelsUpdatedAt: timestamp, modelsStale: false, isLoading: false, error: null,
       gpuCloudRates: new Map(), gpuHardwareCosts: new Map(),
       health: { status: 'ok', version: 'test', sources: {
-        'cloud.aws': { last_success: timestamp, stale: true, last_error: null },
+        'models.openrouter': { last_success: timestamp, stale: true, last_error: null },
       } },
     })
     await render(); await click('Data and assumptions')
     const prices = host.querySelector('[aria-labelledby="hybrid-pricing-details-heading"]')!
-    expect(prices.textContent).toContain('Stale sourcesAWS')
+    expect(prices.textContent).toContain('Stale sourcesOpenRouter')
     expect(prices.textContent).toContain(expected)
     expect(prices.querySelector('a[href="/sources"]')!.textContent).toBe('View source collection times')
     if (timestamp === null) expect(prices.textContent).toContain('Not supplied')
