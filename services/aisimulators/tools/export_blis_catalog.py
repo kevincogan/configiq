@@ -291,7 +291,6 @@ def export_catalog(
                 )
             )
             continue
-        owners[name] = model_id
 
         if not is_hf_config(source_config):
             result.skipped.append(
@@ -316,6 +315,7 @@ def export_catalog(
             entry["quantization"]["aisimulate"] = quantization(source_config)
             if relation != RELATION_IDENTICAL:
                 entry["differences"] = config_differences(source_config, upstream_config)
+            owners[name] = model_id
             result.shared += 1
             continue
 
@@ -350,6 +350,7 @@ def export_catalog(
             continue
 
         equivalent = upstream_by_digest.get(config_digest(source_config))
+        owners[name] = model_id
         models[name] = {
             "origin": "aisimulate",
             "graph": True,

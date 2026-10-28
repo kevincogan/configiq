@@ -181,6 +181,21 @@ def test_catalog_name_collision_keeps_the_first_model_and_records_the_second(tmp
     assert skipped["aisimulate_model_id"] == "OrgB/Model"
 
 
+def test_a_skipped_model_does_not_claim_its_catalog_name(tmp_path) -> None:
+    catalog = tmp_path / "catalog"
+    source = write_source(
+        tmp_path / "source",
+        {"OrgA--Model": {"note": "not a model"}, "OrgB--Model": hf_config()},
+    )
+    write_derive_stub(catalog)
+
+    result = export_catalog(catalog, source, "1.2.3")
+
+    assert (result.added, result.shared, result.skipped_count) == (1, 0, 1)
+    assert result.manifest["models"]["model"]["aisimulate_model_id"] == "OrgB/Model"
+    assert result.manifest["skipped"][0]["reason"] == SKIP_NOT_HF_CONFIG
+
+
 def test_non_hf_config_is_skipped_not_fatal(tmp_path) -> None:
     catalog = tmp_path / "catalog"
     write_upstream(catalog, "kept", hf_config())
