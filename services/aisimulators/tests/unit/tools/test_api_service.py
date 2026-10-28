@@ -721,21 +721,56 @@ class TestBackends:
         # Fleet figure follows the majority current version, not the newest declared.
         assert backend["memory_fraction"] == 0.92
 
-    def test_without_a_version_gate_the_newest_declared_version_stays_the_default(self, monkeypatch):
-        """The SDK rejects aliases when it ships no slots file, so do not advertise one."""
+    def test_numeric_version_order_is_used_when_slots_are_absent(self, monkeypatch):
         self._patch_backends(
             monkeypatch,
-            supported={"h200_sxm": {"vllm": ["0.24.0", "0.31.0"]}},
+            supported={"h200_sxm": {"vllm": ["0.9.0", "0.10.0"]}},
             slots={},
-            fractions={"0.24.0": 0.92, "0.31.0": 0.92, None: 0.92},
+            fractions={"0.9.0": 0.9, "0.10.0": 0.92, None: 0.92},
+        )
+
+        backend = client.get("/backends").json()["backends"][0]
+
+        assert backend["default_version"] == "0.10.0"
+        assert backend["system_defaults"]["h200_sxm"] == {
+            "version": "0.10.0", "memory_fraction": 0.92,
+        }
+
+    def test_without_any_version_gate_default_is_newest_not_majority(self, monkeypatch):
+        """The no-gate default is newest declared; fleet fraction remains majority-based."""
+        self._patch_backends(
+            monkeypatch,
+            supported={
+                "h200_sxm": {"vllm": ["0.14.0"]},
+                "h100_sxm": {"vllm": ["0.14.0"]},
+                "b60": {"vllm": ["0.31.0"]},
+            },
+            slots={},
+            fractions={"0.14.0": 0.9, "0.31.0": 0.92, None: 0.92},
         )
 
         backend = client.get("/backends").json()["backends"][0]
 
         assert backend["default_version"] == "0.31.0"
-        assert backend["system_defaults"] == {
-            "h200_sxm": {"version": "0.31.0", "memory_fraction": 0.92},
-        }
+        assert backend["memory_fraction"] == 0.9
+
+    def test_current_alias_requires_slots_for_every_system(self, monkeypatch):
+        """A mixed gated/ungated fleet must not advertise an alias the latter rejects."""
+        self._patch_backends(
+            monkeypatch,
+            supported={
+                "h200_sxm": {"vllm": ["0.24.0", "0.31.0"]},
+                "ungated_gpu": {"vllm": ["0.26.0"]},
+            },
+            slots={("h200_sxm", "vllm"): {"current": "0.24.0", "next": "0.31.0"}},
+            fractions={"0.24.0": 0.92, "0.26.0": 0.9, None: 0.92},
+        )
+
+        backend = client.get("/backends").json()["backends"][0]
+
+        assert backend["default_version"] == "0.26.0"
+        assert backend["system_defaults"]["h200_sxm"]["version"] == "0.24.0"
+        assert backend["system_defaults"]["ungated_gpu"]["version"] == "0.26.0"
 
 
 # ─── /systems tests ──────────────────────────────────────────────────────────

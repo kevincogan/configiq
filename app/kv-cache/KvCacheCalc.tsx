@@ -5,7 +5,7 @@ import { Alert, Label, Spinner } from '@patternfly/react-core'
 import CheckCircleIcon from '@patternfly/react-icons/dist/esm/icons/check-circle-icon'
 import { formatBytes } from '@/lib/utils/format'
 import { useCountUp } from '@/app/predict/performanceHelpers'
-import { systemMemoryFraction, useCatalog } from '@/lib/hooks/useCatalog'
+import { hasDefaultMemoryFractionForVersion, systemMemoryFraction, useCatalog } from '@/lib/hooks/useCatalog'
 import { useSettings, type InferenceBackend } from '@/contexts/SettingsContext'
 import { getAppConfig } from '@/lib/app-config'
 import { ModelInput, type ModelStatus } from '@/components/ui/ModelInput';
@@ -136,7 +136,13 @@ export default function KvCacheCalc() {
   const invalidMaxBatchSize = maxBatchSizeInput === '' || parseInt(maxBatchSizeInput, 10) < 1;
   const invalidTpSize = tpSizeInput === '' || parseInt(tpSizeInput, 10) < 1;
   const invalidPpSize = ppSizeInput === '' || parseInt(ppSizeInput, 10) < 1;
-  const invalidMemFractionValue = memFractionValueInput === '' || !Number.isFinite(Number(memFractionValueInput)) || Number(memFractionValueInput) < 0 || Number(memFractionValueInput) > 1;
+  const selectedBackend = backendOptions.find(option => option.id === backend)
+  const needsExplicitMemFraction = Boolean(
+    backendVersion.trim() &&
+    !memFractionValueUserEdited.current &&
+    !hasDefaultMemoryFractionForVersion(selectedBackend, system, backendVersion),
+  )
+  const invalidMemFractionValue = needsExplicitMemFraction || memFractionValueInput === '' || !Number.isFinite(Number(memFractionValueInput)) || Number(memFractionValueInput) < 0 || Number(memFractionValueInput) > 1;
   const invalidParallelism = servingMode === 'disagg'
     ? invalidPhaseParallel(prefillPar) || invalidPhaseParallel(decodePar)
     : invalidTpSize || invalidPpSize;
@@ -487,6 +493,11 @@ export default function KvCacheCalc() {
                   step={0.05}
                   className={invalidMemFractionValue ? styles.paramInputInvalid : styles.numberInput}
                 />
+                {needsExplicitMemFraction && (
+                  <div className={styles.helperText}>
+                    This version differs from the system default. Enter a memory fraction for the pinned version.
+                  </div>
+                )}
               </div>
               <div className={styles.field}>
                 <label htmlFor="kv-mem-kind" className={styles.fieldLabel}>Fraction kind</label>

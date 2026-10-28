@@ -409,7 +409,7 @@ def _current_or_newest(slots: dict[str, str] | None, versions: list[str]) -> str
     """
     if slots and slots.get("current"):
         return slots["current"]
-    return versions[-1] if versions else None
+    return max(versions, key=_version_sort_key) if versions else None
 
 
 class _noop_context:
@@ -1112,10 +1112,13 @@ def get_backends():
         backend = get_backend(entry["aisimulate_id"])
         versions = sorted(entry["versions"], key=_version_sort_key)
         system_defaults: dict[str, str | None] = {}
-        gate_enabled = False
+        gate_enabled = bool(entry["systems"])
+        any_gate_enabled = False
         for system, system_versions in sorted(entry["systems"].items()):
             slots = get_version_slots(system, entry["aisimulate_id"])
-            gate_enabled = gate_enabled or bool(slots)
+            has_slots = bool(slots)
+            gate_enabled = gate_enabled and has_slots
+            any_gate_enabled = any_gate_enabled or has_slots
             system_defaults[system] = _current_or_newest(slots, system_versions)
         # Fleet-wide defaults describe the version most systems run, so a single
         # backend-level figure does not silently advertise a version that only
@@ -1128,10 +1131,12 @@ def get_backends():
             "id": public_id,
             "aisimulate_id": entry["aisimulate_id"],
             "versions": versions,
-            # The alias resolves per system, so one default cannot be wrong on
-            # some systems. Without a version gate the SDK rejects aliases, so
-            # fall back to the newest declared version.
-            "default_version": "current" if gate_enabled else fleet_version,
+            # The alias resolves per system, so it is safe only when every
+            # system has slots. Mixed backends use the fleet fallback; with no
+            # gate anywhere, retain the newest declared version.
+            "default_version": "current" if gate_enabled else (
+                fleet_version if any_gate_enabled else (versions[-1] if versions else None)
+            ),
             "memory_fraction": backend.get_default_free_gpu_memory_fraction(fleet_version),
             "memory_fraction_kind": "of_free" if backend.memory_fraction_of_free() else "of_total",
             "runtime_field": {

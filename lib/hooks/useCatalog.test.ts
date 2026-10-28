@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mapBackendOption, systemMemoryFraction } from './useCatalog'
+import { hasDefaultMemoryFractionForVersion, mapBackendOption, systemMemoryFraction } from './useCatalog'
 
 describe('mapBackendOption', () => {
   it('maps backend memory defaults from the REST catalog', () => {
@@ -74,5 +74,28 @@ describe('systemMemoryFraction', () => {
 
   it('returns null when the backend is unknown', () => {
     expect(systemMemoryFraction(undefined, 'a100_sxm')).toBeNull()
+  })
+})
+
+describe('hasDefaultMemoryFractionForVersion', () => {
+  const backend = mapBackendOption({
+    id: 'vllm',
+    versions: ['0.14.0', '0.24.0'],
+    default_version: 'current',
+    system_defaults: {
+      a100_sxm: { version: '0.14.0', memory_fraction: 0.9 },
+    },
+  })
+
+  it('accepts an omitted pin, current alias, or matching system version', () => {
+    expect(hasDefaultMemoryFractionForVersion(backend ?? undefined, 'a100_sxm', '')).toBe(true)
+    expect(hasDefaultMemoryFractionForVersion(backend ?? undefined, 'a100_sxm', 'current')).toBe(true)
+    expect(hasDefaultMemoryFractionForVersion(backend ?? undefined, 'a100_sxm', '0.14.0')).toBe(true)
+  })
+
+  it('requires an explicit fraction for another version or missing per-system data', () => {
+    expect(hasDefaultMemoryFractionForVersion(backend ?? undefined, 'a100_sxm', '0.24.0')).toBe(false)
+    expect(hasDefaultMemoryFractionForVersion(backend ?? undefined, 'h100_sxm', '0.14.0')).toBe(false)
+    expect(hasDefaultMemoryFractionForVersion(undefined, 'a100_sxm', '0.14.0')).toBe(false)
   })
 })

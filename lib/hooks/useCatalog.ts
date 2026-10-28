@@ -103,6 +103,22 @@ export function systemMemoryFraction(backend: BackendOption | undefined, system:
   return backend.systemDefaults[system]?.memoryFraction ?? backend.memoryFraction
 }
 
+/** Whether the catalog's system default fraction is known to match a version pin. */
+export function hasDefaultMemoryFractionForVersion(
+  backend: BackendOption | undefined,
+  system: string,
+  backendVersion: string,
+): boolean {
+  const version = backendVersion.trim()
+  if (!version) return true
+  if (!backend) return false
+
+  const systemDefault = backend.systemDefaults[system]
+  if (!systemDefault?.version || systemDefault.memoryFraction == null) return false
+  if (version === 'current') return backend.defaultVersion === 'current'
+  return version === systemDefault.version
+}
+
 export interface Catalog {
   gpuOptions: GpuOption[]
   modelOptions: string[]
