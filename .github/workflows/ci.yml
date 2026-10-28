@@ -48,6 +48,11 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          # The runner image's system Python tracks the newest CPython, but the
+          # service locks still carry jaxlib 0.4.38 (cp311-cp313 wheels only).
+          # Pin the interpreter so `uv sync` resolves against a supported ABI
+          # instead of failing on a runner-image bump.
+          python-version: "3.12"
 
       - name: Sync dependencies
         working-directory: services/aisimulators
@@ -87,6 +92,11 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          # The runner image's system Python tracks the newest CPython, but the
+          # service locks still carry jaxlib 0.4.38 (cp311-cp313 wheels only).
+          # Pin the interpreter so `uv sync` resolves against a supported ABI
+          # instead of failing on a runner-image bump.
+          python-version: "3.12"
 
       - name: Sync dependencies
         working-directory: services/aicostings
@@ -111,6 +121,11 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+          # The runner image's system Python tracks the newest CPython, but the
+          # service locks still carry jaxlib 0.4.38 (cp311-cp313 wheels only).
+          # Pin the interpreter so `uv sync` resolves against a supported ABI
+          # instead of failing on a runner-image bump.
+          python-version: "3.12"
 
       - name: Sync dependencies
         working-directory: services/mcp-gateway
