@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import Any, Literal
 
@@ -31,7 +32,7 @@ from aisimulate_core.sdk.backends.factory import get_backend
 from aisimulate_core.sdk.common import get_default_models
 from aisimulate_core.sdk.errors import NoFeasibleConfigError
 from aisimulate_core.sdk.memory import estimate_kv_cache
-from aisimulate_core.sdk.perf_database import get_supported_databases, load_system_spec
+from aisimulate_core.sdk.perf_database import get_supported_databases, get_version_slots, load_system_spec
 from aisimulate_core.sdk.utils import get_model_config_from_model_path
 
 # Optional observability + MCP, provided by the shared configiq package
@@ -398,6 +399,17 @@ def _backend_runtime_memory_field(backend: str) -> str:
 
 def _version_sort_key(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in re.findall(r"\d+", version))
+
+
+def _current_or_newest(slots: dict[str, str] | None, versions: list[str]) -> str | None:
+    """The version a system completed, not the newest one anyone declared.
+
+    Slots are absent when the SDK ships no version gate, where the newest
+    declared version is the best available answer.
+    """
+    if slots and slots.get("current"):
+        return slots["current"]
+    return max(versions, key=_version_sort_key) if versions else None
 
 
 class _noop_context:
@@ -987,6 +999,17 @@ def _memory_breakdown_gb(breakdown: MemoryBreakdown | None) -> float | None:
     return total_bytes / (1024 ** 3)
 
 
+#: Version rejections the engine runner wraps as RuntimeError("ValueError: ..."),
+#: so they arrive by text rather than by exception type.
+_UNSERVABLE_MESSAGE = re.compile(
+    r"is not a queryable version|no queryable versions defined|no timing data for"
+)
+
+
+def _unwrapped_detail(msg: str) -> str:
+    return re.sub(r"^[A-Za-z_][A-Za-z0-9_]*Error: ", "", msg, count=1)
+
+
 def _common_error_handler(e: Exception, op: str, model_path: str, backend: str, system: str) -> None:
     msg = str(e)
     # aisimulate's recommendation stack uses NoViableParallelConfig when a
@@ -1001,6 +1024,10 @@ def _common_error_handler(e: Exception, op: str, model_path: str, backend: str, 
     # infeasible and must not terminate an incremental search.
     if "NoViableParallelConfig" in msg or "no deployment_mode has a viable parallel config" in msg:
         raise HTTPException(status_code=422, detail=msg)
+    # The engine runner reports the same two rejections as RuntimeError
+    # ("ValueError: ..."), so they are matched by text as well as by type.
+    if _UNSERVABLE_MESSAGE.search(msg):
+        raise HTTPException(status_code=422, detail=_unwrapped_detail(msg))
     if isinstance(e, KeyError):
         # A bare KeyError here almost always means a supplied model_config is
         # incomplete (e.g. missing 'architectures'); str(KeyError('x')) is "'x'".
@@ -1084,12 +1111,33 @@ def get_backends():
     for public_id, entry in sorted(backend_data.items()):
         backend = get_backend(entry["aisimulate_id"])
         versions = sorted(entry["versions"], key=_version_sort_key)
+        system_defaults: dict[str, str | None] = {}
+        gate_enabled = bool(entry["systems"])
+        any_gate_enabled = False
+        for system, system_versions in sorted(entry["systems"].items()):
+            slots = get_version_slots(system, entry["aisimulate_id"])
+            has_slots = bool(slots)
+            gate_enabled = gate_enabled and has_slots
+            any_gate_enabled = any_gate_enabled or has_slots
+            system_defaults[system] = _current_or_newest(slots, system_versions)
+        # Fleet-wide defaults describe the version most systems run, so a single
+        # backend-level figure does not silently advertise a version that only
+        # one override system declares.
+        counts = Counter(version for version in system_defaults.values() if version)
+        fleet_version = max(
+            counts.items(), key=lambda item: (item[1], _version_sort_key(item[0]))
+        )[0] if counts else None
         result.append({
             "id": public_id,
             "aisimulate_id": entry["aisimulate_id"],
             "versions": versions,
-            "default_version": versions[-1] if versions else None,
-            "memory_fraction": backend.get_default_free_gpu_memory_fraction(versions[-1] if versions else None),
+            # The alias resolves per system, so it is safe only when every
+            # system has slots. Mixed backends use the fleet fallback; with no
+            # gate anywhere, retain the newest declared version.
+            "default_version": "current" if gate_enabled else (
+                fleet_version if any_gate_enabled else (versions[-1] if versions else None)
+            ),
+            "memory_fraction": backend.get_default_free_gpu_memory_fraction(fleet_version),
             "memory_fraction_kind": "of_free" if backend.memory_fraction_of_free() else "of_total",
             "runtime_field": {
                 "vllm": "gpu_memory_utilization",
@@ -1097,6 +1145,13 @@ def get_backends():
                 "trtllm": "free_gpu_memory_fraction",
             }.get(entry["aisimulate_id"]),
             "systems": entry["systems"],
+            "system_defaults": {
+                system: {
+                    "version": version,
+                    "memory_fraction": backend.get_default_free_gpu_memory_fraction(version),
+                }
+                for system, version in system_defaults.items()
+            },
         })
     return {"backends": result}
 

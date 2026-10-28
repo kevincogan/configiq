@@ -38,19 +38,45 @@ export interface ModelSpec {
   architecture: string | null
 }
 
+/** The version a single system completed, with the memory fraction it implies. */
+export interface SystemDefault {
+  version: string | null
+  memoryFraction: number | null
+}
+
 export interface BackendOption {
   id: string
   aisimulateId: string
   versions: string[]
+  /** Version namespace the API resolves per system (`current`), not a literal. */
   defaultVersion: string | null
   memoryFraction: number | null
   memoryFractionKind: 'of_total' | 'of_free'
   runtimeField: string | null
   systems: Record<string, string[]>
+  /** Per-system defaults — the only safe source for a system-specific fraction. */
+  systemDefaults: Record<string, SystemDefault>
+}
+
+function mapSystemDefault(raw: unknown): SystemDefault | null {
+  if (!raw || typeof raw !== 'object') return null
+  const entry = raw as Record<string, unknown>
+  return {
+    version: typeof entry.version === 'string' ? entry.version : null,
+    memoryFraction: typeof entry.memory_fraction === 'number' ? entry.memory_fraction : null,
+  }
 }
 
 export function mapBackendOption(backend: Record<string, unknown>): BackendOption | null {
   if (typeof backend.id !== 'string' || !Array.isArray(backend.versions)) return null
+  const rawSystemDefaults = backend.system_defaults && typeof backend.system_defaults === 'object'
+    ? backend.system_defaults as Record<string, unknown>
+    : {}
+  const systemDefaults: Record<string, SystemDefault> = {}
+  for (const [system, raw] of Object.entries(rawSystemDefaults)) {
+    const mapped = mapSystemDefault(raw)
+    if (mapped) systemDefaults[system] = mapped
+  }
   return {
     id: backend.id,
     aisimulateId: typeof backend.aisimulate_id === 'string' ? backend.aisimulate_id : backend.id,
@@ -62,7 +88,35 @@ export function mapBackendOption(backend: Record<string, unknown>): BackendOptio
     systems: backend.systems && typeof backend.systems === 'object'
       ? backend.systems as Record<string, string[]>
       : {},
+    systemDefaults,
   }
+}
+
+/**
+ * The memory fraction to seed a system's controls with.
+ *
+ * Fractions are version-keyed, so the system's own default wins; the
+ * backend-level figure only describes the fleet's majority version.
+ */
+export function systemMemoryFraction(backend: BackendOption | undefined, system: string): number | null {
+  if (!backend) return null
+  return backend.systemDefaults[system]?.memoryFraction ?? backend.memoryFraction
+}
+
+/** Whether the catalog's system default fraction is known to match a version pin. */
+export function hasDefaultMemoryFractionForVersion(
+  backend: BackendOption | undefined,
+  system: string,
+  backendVersion: string,
+): boolean {
+  const version = backendVersion.trim()
+  if (!version) return true
+  if (!backend) return false
+
+  const systemDefault = backend.systemDefaults[system]
+  if (!systemDefault?.version || systemDefault.memoryFraction == null) return false
+  if (version === 'current') return backend.defaultVersion === 'current'
+  return version === systemDefault.version
 }
 
 export interface Catalog {

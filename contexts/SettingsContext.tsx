@@ -16,7 +16,9 @@ const STORAGE_KEYS = {
   defaultModel: 'settings_default_model',
   hfToken: 'hf_token',
   inferenceBackend: 'settings_inference_backend',
-  backendVersion: 'settings_backend_version',
+  // v2: the old key held the fleet-wide newest version, which is not queryable
+  // on every system. Dropping it clears those stale literal pins.
+  backendVersion: 'settings_backend_version_v2',
   costingsEnabled: 'settings_costings_enabled',
   preferredCloudProvider: 'settings_preferred_cloud_provider',
   pricingSource: 'settings_pricing_source',

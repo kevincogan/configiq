@@ -33,7 +33,7 @@ import { ModelInput, type ModelStatus } from '@/components/ui/ModelInput';
 import { ComboBox, type ComboBoxItem } from '@/components/ModelComboBox/ModelComboBox';
 import { buildModelItems, needsHfConfig } from '@/lib/model-options';
 import { GpuSystemInput } from '@/components/ui/GpuSystemInput';
-import { useCatalog, type ModelSpec } from '@/lib/hooks/useCatalog';
+import { useCatalog, systemMemoryFraction, type ModelSpec } from '@/lib/hooks/useCatalog';
 import { GpuChipLoader } from '@/components/GpuChipLoader/GpuChipLoader';
 import { useSettings } from '@/contexts/SettingsContext';
 import { useCostings, resolveCloudRate } from '@/lib/hooks/useCostings';
@@ -224,7 +224,7 @@ export default function Performance() {
 
   const effectiveGpuMemoryUtilization = gpuMemoryUtilization
     ?? testResult?.vllm_config.gpu_memory_utilization
-    ?? backendOptions?.find(backend => backend.id === inferenceBackend)?.memoryFraction
+    ?? systemMemoryFraction(backendOptions?.find(backend => backend.id === inferenceBackend), gpu)
     ?? null;
 
   // Save estimate modal
