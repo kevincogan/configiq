@@ -44,13 +44,64 @@ The image also exposes the simulator CLIs at stable paths:
 /usr/local/bin/blis
 ```
 
-BLIS v0.9.2 is copied from an immutable image digest during the multi-stage
-build. Its catalog is based on BLIS catalog release 0.1.1 at pinned commit
-`6fe4664576bc43d601bba6619aca4fbb42c5087b`, with the packaged
-AISimulate model configs exported into the catalog's `models/` namespace. BLIS
-hardware facts are not modified by this export. The image sets
-`BLIS_CATALOG=/opt/blis/catalog`; callers should still pass `--catalog` for
-explicit, reproducible runs.
+BLIS v0.13.0 is built from source in the multi-stage build (commit
+`1813579275e3f782ecc1a83ef508017935121235`) rather than copied from an image
+digest. Upstream never published a GHCR image for v0.12.0 or v0.13.0: its own
+`Dockerfile` names `golang:1.24-alpine` while `go.mod` requires Go 1.27.2, so the
+build failed at the tag. Building here keeps the Go base under our control
+(`BLIS_GO_VERSION`). The image bundles the three inputs a BLIS run needs, all at
+pinned commits:
+
+| Path | Contents | Pin |
+|---|---|---|
+| `/opt/blis/catalog` | declared facts: model graphs, chips, fabrics, workloads | blis-catalog `0.3.0`, `676326ec6c708e91ec4981bd6b03922a7fe60512` |
+| `/opt/blis/registry` | fitted coefficient sets a scenario names | blis-registry `v0.2.0`, `7f6662d7188dc3dc873a37623e1f7bbfe1d6081b` |
+| `/opt/blis/scenarios` | the upstream example scenarios for the same BLIS release | BLIS `v0.13.0`, `1813579275e3f782ecc1a83ef508017935121235` |
+
+The build then runs [`tools/export_blis_catalog.py`](tools/export_blis_catalog.py)
+to reconcile the wheel's packaged AISimulate model configs with that catalog:
+
+- **The upstream catalog always wins a shared name.** AISimulate can only add
+  models the catalog does not already define, so a reviewed BLIS graph is never
+  silently replaced.
+- **An added model must earn its place.** The exporter runs blis-catalog's own
+  `scripts/derive_graph.py` for every added model and keeps it only if a
+  `graph.yaml` comes out. A model BLIS cannot price is removed and recorded.
+- **Nothing is dropped silently.** Unsupported architectures, name collisions and
+  malformed configs are recorded in `/opt/blis/support.json` with a stable reason
+  code, so the API can explain an unavailable model instead of returning a generic
+  error.
+
+`/opt/blis/support.json` is the API contract for simulator selection. It records,
+per catalog model, whether it came from upstream or AISimulate, whether it has a
+graph, its quantization, how an AISimulate config relates to the upstream entry of
+the same name (`identical`, `different_quantization`, `different`, with the
+differing paths), and any `equivalent_catalog_name`. It also lists the skipped
+AISimulate models with reasons, plus the bundled hardware, fabrics and scenarios.
+
+Because the upstream catalog wins, BLIS prices the catalog's reviewed config even
+when the wheel's copy differs. For example, upstream `glm-5` is the FP8 variant
+while AISimulate's `zai-org/GLM-5` is the unquantized base; the manifest marks that
+shared entry `different_quantization` and records the FP8 AISimulate model
+separately as `glm-5-fp8` with `equivalent_catalog_name: glm-5`.
+
+The image sets `BLIS_CATALOG`, `BLIS_REGISTRY`, `BLIS_SCENARIOS` and
+`BLIS_SUPPORT`. BLIS itself only reads `BLIS_CATALOG` from the environment; the
+registry and scenario directory have no environment fallback, so callers must pass
+`--registry` and `--scenarios` explicitly as well:
+
+```bash
+blis run --catalog "$BLIS_CATALOG" --registry "$BLIS_REGISTRY" \
+  --scenarios "$BLIS_SCENARIOS" \
+  --scenario deepseek-v4.1-flash-h100-tp8-dspark5.yaml \
+  --rate 10 --num-requests 100
+```
+
+To move to a new BLIS release, bump `BLIS_COMMIT`, `BLIS_CATALOG_COMMIT`,
+`BLIS_REGISTRY_COMMIT` and (if `go.mod` requires it) `BLIS_GO_VERSION` together;
+see
+[docs/RELEASE_PROCESS.md](../../docs/RELEASE_PROCESS.md#bumping-blis).
+
 
 The `aisimulate` SDK wheel is pinned in `pyproject.toml` by exact fork-release
 download URL (the `aisimulate @ …` entry), so the image always installs that

@@ -21,6 +21,7 @@ vi.mock('@/lib/app-config', async (importOriginal) => {
 });
 
 vi.mock('@/lib/hooks/useCatalog', () => ({
+  systemMemoryFraction: () => null,
   useCatalog: () => ({
     gpuOptions: [
       { systemId: 'h200_sxm', displayName: 'NVIDIA H200', vramGb: 141 },

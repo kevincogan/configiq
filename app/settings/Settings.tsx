@@ -35,7 +35,6 @@ export function Settings() {
   const [costingsSaved, setCostingsSaved] = React.useState(false);
   const [costingsOpen, setCostingsOpen] = React.useState(false);
   const [validatedOpen, setValidatedOpen] = React.useState(false);
-  const backendDefaultAttempted = React.useRef(false);
 
   // Sync local model input once context has loaded from localStorage
   const modelSynced = React.useRef(false);
@@ -73,14 +72,6 @@ export function Settings() {
     return () => clearTimeout(timer);
   }, [localModel, hfToken, modelOptions, catalogLoading, hydrated]);
 
-  React.useEffect(() => {
-    if (hydrated && backendOptions.length > 0 && !backendDefaultAttempted.current) {
-      backendDefaultAttempted.current = true;
-      const defaultVersion = backendOptions.find(b => b.id === inferenceBackend)?.defaultVersion;
-      if (!backendVersion && defaultVersion) setBackendVersion(defaultVersion);
-    }
-  }, [hydrated, backendOptions, inferenceBackend, backendVersion, setBackendVersion]);
-
   const handleTokenChange = (v: string) => {
     setHfToken(v);
     if (v.startsWith('hf_')) {
@@ -90,9 +81,7 @@ export function Settings() {
   };
 
   const handleBackendChange = (v: InferenceBackend) => {
-    setInferenceBackend(v); // also resets backendVersion to the default for v
-    const defaultVersion = backendOptions.find(b => b.id === v)?.defaultVersion;
-    setBackendVersion(defaultVersion ?? '');
+    setInferenceBackend(v); // also clears backendVersion
     setBackendSaved(true);
     setTimeout(() => setBackendSaved(false), 3000);
   };
@@ -286,7 +275,7 @@ export function Settings() {
             {selectedBackend && (
               <div className={styles.helperText}>
                 {selectedBackend.versions.length > 0
-                  ? `Supported versions: ${selectedBackend.versions.join(', ')}`
+                  ? `Supported versions: ${selectedBackend.versions.join(', ')}. Leave blank to use each system's default.`
                   : 'No versions reported by AISimulators'}
               </div>
             )}
