@@ -12,6 +12,9 @@ permissions:
 
 # No path filters on any job: every push/PR checks all four components, matching
 # the "release in unison" model of the build workflow.
+#
+# Service jobs pin one interpreter (3.12) so a runner-image bump cannot change
+# the Python under the tests.
 jobs:
   check:
     name: Frontend — type-check, lint, and build
@@ -48,10 +51,6 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          # The runner image's system Python tracks the newest CPython, but the
-          # service locks still carry jaxlib 0.4.38 (cp311-cp313 wheels only).
-          # Pin the interpreter so `uv sync` resolves against a supported ABI
-          # instead of failing on a runner-image bump.
           python-version: "3.12"
 
       - name: Sync dependencies
@@ -92,10 +91,6 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          # The runner image's system Python tracks the newest CPython, but the
-          # service locks still carry jaxlib 0.4.38 (cp311-cp313 wheels only).
-          # Pin the interpreter so `uv sync` resolves against a supported ABI
-          # instead of failing on a runner-image bump.
           python-version: "3.12"
 
       - name: Sync dependencies
@@ -121,10 +116,6 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-          # The runner image's system Python tracks the newest CPython, but the
-          # service locks still carry jaxlib 0.4.38 (cp311-cp313 wheels only).
-          # Pin the interpreter so `uv sync` resolves against a supported ABI
-          # instead of failing on a runner-image bump.
           python-version: "3.12"
 
       - name: Sync dependencies
