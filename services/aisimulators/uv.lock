@@ -126,6 +126,7 @@ dependencies = [
     { name = "plotext" },
     { name = "pyarrow" },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -158,6 +159,7 @@ requires-dist = [
     { name = "plotext", specifier = ">=5.3.2,<6" },
     { name = "pyarrow" },
     { name = "pydantic" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "uvicorn", extras = ["standard"] },
 ]
 provides-extras = ["otel", "mcp"]

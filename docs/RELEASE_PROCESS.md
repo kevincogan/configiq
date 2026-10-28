@@ -101,6 +101,55 @@ so rebuilds are reproducible. The wheel is produced by the fork's
 > so both service images are substantially larger than under the previous
 > two-wheel aiconfigurator 0.11/0.12 SDK.
 
+After bumping the SDK, rebuild the `aisimulators` image before assuming the new
+model configs are live: its build merges the wheel's configs into the BLIS
+catalog and regenerates `/opt/blis/support.json`. Check the exporter's summary
+(`N added, M shared, K skipped`) and the `skipped` list in the manifest for
+configs that stopped loading.
+
+## Bumping BLIS
+
+BLIS is built from source inside `services/aisimulators/Containerfile`; there is
+no published BLIS image to copy. Upstream's own `Dockerfile` named a Go base
+older than its `go.mod` required, so the v0.12.0 and v0.13.0 images were never
+published — do not expect a GHCR tag to appear for a release.
+
+The build pins four things as `ARG`s at the top of the Containerfile, each a
+commit rather than a tag:
+
+| Argument | Upstream repo |
+|---|---|
+| `BLIS_COMMIT` | `inference-sim/inference-sim` |
+| `BLIS_GO_VERSION` | the `golang:<version>-alpine` builder base |
+| `BLIS_CATALOG_COMMIT` | `inference-sim/blis-catalog` |
+| `BLIS_REGISTRY_COMMIT` | `inference-sim/blis-registry` |
+
+To move to a new BLIS release:
+
+1. Read the release's `go.mod` and set `BLIS_GO_VERSION` to its `go` directive;
+   a mismatch fails the image build with a Go toolchain error.
+2. Set `BLIS_COMMIT` to the release tag's commit, and bump the catalog and
+   registry commits to the releases that release is tested against (its
+   `README.md` names them).
+3. Rebuild the image and confirm the exporter summary is plausible. A release
+   that adds an architecture the catalog's `scripts/derive_graph.py` cannot
+   derive will show up under `skipped` in `/opt/blis/support.json` rather than
+   disappearing.
+4. Verify the merged catalog still loads through BLIS's production loader by
+   running `scripts/catalog-load-gate.sh` from the BLIS checkout with
+   `BLIS_CATALOG` pointing at the merged catalog.
+
+BLIS never fetches at run time, so the catalog, registry and example scenarios
+must all be baked into the image. `/opt/blis/support.json` is the API contract:
+which models BLIS can price, where each came from, how an AISimulate config
+relates to a same-named upstream entry, and which hardware, fabrics and scenarios
+are bundled.
+
+> **Note:** ConfigIQ deliberately keeps building BLIS from source. A published
+> image would need upstream to fix its Go base first, and would give up the
+> per-release catalog/registry pins the exporter relies on.
+
+
 ## Deployment
 
 Deployment is handled by the `configiq-deploy` repo (rootless Podman + systemd
