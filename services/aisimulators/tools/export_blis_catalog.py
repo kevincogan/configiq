@@ -42,6 +42,13 @@ import yaml
 MANIFEST_SCHEMA_VERSION = 1
 GENERATOR = "services/aisimulators/tools/export_blis_catalog.py"
 
+#: Wall-clock bound on one graph derivation. Deriving a single model measures at ~0.1s on a
+#: laptop (cold process and PyYAML import included), so this is ~100x headroom: it exists only
+#: to turn a wedged deriver into a recorded skip instead of a hung image build. It is
+#: deliberately loose, because a timeout here drops a model from the manifest — the expensive
+#: mistake is a model we could have priced, not a build that takes ten seconds longer.
+DERIVE_TIMEOUT_SECONDS = 10.0
+
 #: Skip reasons, stable strings the API may branch on.
 SKIP_NOT_HF_CONFIG = "not_hf_config"
 SKIP_GRAPH_DERIVATION_FAILED = "graph_derivation_failed"
@@ -219,12 +226,18 @@ def _catalog_names(catalog_root: Path, subdir: str, suffix: str) -> list[str]:
 
 
 def _derive_graph(catalog_root: Path, name: str, derive_script: Path) -> tuple[bool, str]:
-    completed = subprocess.run(
-        [sys.executable, str(derive_script), str(catalog_root), "--model", name],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(derive_script), str(catalog_root), "--model", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=DERIVE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        # Recorded as a skip like any other derivation failure: the export's contract is that
+        # nothing abort the build, and the manifest says which model was lost and why.
+        return False, f"derive_graph.py timed out after {DERIVE_TIMEOUT_SECONDS:g}s"
     if completed.returncode == 0 and (catalog_root / "models" / name / "graph.yaml").is_file():
         return True, ""
     detail = (completed.stderr or completed.stdout or "").strip().splitlines()

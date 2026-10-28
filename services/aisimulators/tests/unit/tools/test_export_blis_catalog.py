@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from tools import export_blis_catalog
 from tools.export_blis_catalog import (
+    DERIVE_TIMEOUT_SECONDS,
     SKIP_CATALOG_NAME_COLLISION,
     SKIP_GRAPH_DERIVATION_FAILED,
     SKIP_GRAPH_DERIVER_MISSING,
@@ -162,6 +165,67 @@ def test_missing_deriver_skips_added_models_instead_of_shipping_unpriced_entries
     assert (result.added, result.shared, result.skipped_count) == (0, 1, 1)
     assert not (catalog / "models/new").exists()
     assert result.manifest["skipped"][0]["reason"] == SKIP_GRAPH_DERIVER_MISSING
+
+
+def write_sleeping_derive_stub(catalog: Path) -> Path:
+    """A deriver that never returns in time, to exercise the subprocess bound."""
+    script = catalog / "scripts" / "derive_graph.py"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(
+        "import sys\n"
+        "import time\n"
+        "time.sleep(30)\n"
+        "from pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "root = Path(args[0])\n"
+        "model = args[args.index('--model') + 1]\n"
+        "(root / 'models' / model / 'graph.yaml').write_text('kind: ModelGraph\\n')\n"
+    )
+    return script
+
+
+def test_hung_deriver_is_recorded_as_a_skip_not_a_hung_export(tmp_path, monkeypatch) -> None:
+    """A deriver that never finishes must not abort the export or keep the model."""
+    catalog = tmp_path / "catalog"
+    write_upstream(catalog, "upstream", hf_config())
+    source = write_source(
+        tmp_path / "source",
+        {"Org--Upstream": hf_config(), "Org--New": hf_config(2048)},
+    )
+    write_sleeping_derive_stub(catalog)
+    # The real bound is 10s; the stub sleeps 30s, so any value below that fails the same way
+    # without costing the test the wall clock.
+    monkeypatch.setattr(export_blis_catalog, "DERIVE_TIMEOUT_SECONDS", 0.05)
+
+    result = export_catalog(catalog, source, "1.2.3")
+
+    assert (result.added, result.shared, result.skipped_count) == (0, 1, 1)
+    assert not (catalog / "models" / "new").exists()
+    skipped = result.manifest["skipped"][0]
+    assert skipped["catalog_name"] == "new"
+    assert skipped["reason"] == SKIP_GRAPH_DERIVATION_FAILED
+    assert skipped["detail"] == "derive_graph.py timed out after 0.05s"
+
+
+def test_graph_derivation_is_actually_bounded(tmp_path, monkeypatch) -> None:
+    """The timeout argument must reach subprocess.run, so the bound cannot be dropped silently."""
+    calls: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):
+        calls["cmd"] = cmd
+        calls.update(kwargs)
+        return subprocess.CompletedProcess(cmd, 1, "", "boomed\n")
+
+    monkeypatch.setattr(export_blis_catalog.subprocess, "run", fake_run)
+
+    derived, detail = export_blis_catalog._derive_graph(
+        tmp_path, "model", tmp_path / "scripts" / "derive_graph.py"
+    )
+
+    assert derived is False
+    assert detail == "boomed"
+    assert calls["timeout"] == DERIVE_TIMEOUT_SECONDS
+    assert calls["check"] is False
 
 
 def test_catalog_name_collision_keeps_the_first_model_and_records_the_second(tmp_path) -> None:
