@@ -323,6 +323,11 @@ export default function KvCacheCalc() {
             {loading ? 'Calculating…' : 'Calculate'}
           </button>
         </div>
+        {needsExplicitMemFraction && (
+          <div className={styles.helperText} role="status" aria-live="polite">
+            This version differs from the system default. Enter a memory fraction for the pinned version.
+          </div>
+        )}
 
         {/* Advanced settings accordion */}
         <button
@@ -493,11 +498,6 @@ export default function KvCacheCalc() {
                   step={0.05}
                   className={invalidMemFractionValue ? styles.paramInputInvalid : styles.numberInput}
                 />
-                {needsExplicitMemFraction && (
-                  <div className={styles.helperText}>
-                    This version differs from the system default. Enter a memory fraction for the pinned version.
-                  </div>
-                )}
               </div>
               <div className={styles.field}>
                 <label htmlFor="kv-mem-kind" className={styles.fieldLabel}>Fraction kind</label>
