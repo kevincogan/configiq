@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { Button, Label, Switch } from '@patternfly/react-core';
 import { EyeIcon, EyeSlashIcon, CheckCircleIcon, ExclamationTriangleIcon } from '@patternfly/react-icons';
-import { useSettings, type InferenceBackend } from '@/contexts/SettingsContext';
+import { isSimulatorBackendCompatible, useSettings, type InferenceBackend, type Simulator } from '@/contexts/SettingsContext';
 import { getAppConfig } from '@/lib/app-config';
 import { ModelInput } from '@/components/ui/ModelInput';
 import { useCatalog } from '@/lib/hooks/useCatalog';
@@ -22,6 +22,7 @@ export function Settings() {
   const {
     hydrated, defaultModel, setDefaultModel, hfToken, setHfToken,
     inferenceBackend, setInferenceBackend, backendVersion, setBackendVersion,
+    simulator, setSimulator,
     costingsEnabled, setCostingsEnabled,
   } = useSettings();
   const { modelOptions, backendOptions, isLoading: catalogLoading } = useCatalog();
@@ -32,6 +33,7 @@ export function Settings() {
   const [modelSaved, setModelSaved] = React.useState(false);
   const [tokenSaved, setTokenSaved] = React.useState(false);
   const [backendSaved, setBackendSaved] = React.useState(false);
+  const [simulatorSaved, setSimulatorSaved] = React.useState(false);
   const [costingsSaved, setCostingsSaved] = React.useState(false);
   const [costingsOpen, setCostingsOpen] = React.useState(false);
   const [validatedOpen, setValidatedOpen] = React.useState(false);
@@ -84,6 +86,12 @@ export function Settings() {
     setInferenceBackend(v); // also clears backendVersion
     setBackendSaved(true);
     setTimeout(() => setBackendSaved(false), 3000);
+  };
+
+  const handleSimulatorChange = (v: Simulator) => {
+    setSimulator(v);
+    setSimulatorSaved(true);
+    setTimeout(() => setSimulatorSaved(false), 3000);
   };
 
   const handleVersionChange = (v: string) => {
@@ -230,6 +238,36 @@ export function Settings() {
           </div>
         </div>
 
+        {/* ── Simulator ── */}
+        <div className={styles.section}>
+          <div className={styles.sectionHead}>
+            <div>
+              <div className={styles.sectionTitle}>Simulator</div>
+              <div className={styles.sectionDesc}>
+                Simulator used by Predict performance and Recommend sizing.
+              </div>
+            </div>
+            {simulatorSaved && <Label color="green" icon={<CheckCircleIcon />}>Saved</Label>}
+          </div>
+          <div className={styles.fieldWrap}>
+            <div className={styles.backendField}>
+              <label className={styles.fieldLabel} htmlFor="settings-simulator">Simulator</label>
+              <select
+                id="settings-simulator"
+                value={simulator}
+                onChange={e => handleSimulatorChange(e.target.value as Simulator)}
+                className={styles.selectInput}
+              >
+                <option value="aisimulate">AISimulate</option>
+                <option value="blis" disabled={!isSimulatorBackendCompatible('blis', inferenceBackend)}>BLIS</option>
+              </select>
+              <div className={styles.helperText}>
+                Predict and Recommend use this simulator. BLIS is available with vLLM; KV cache uses AISimulate.
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* ── Inference backend ── */}
         <div className={styles.section}>
           <div className={styles.sectionHead}>
@@ -254,7 +292,13 @@ export function Settings() {
                   className={styles.selectInput}
                 >
                   {backendOptions.map(b => (
-                    <option key={b.id} value={b.id}>{BACKEND_LABELS[b.id] ?? b.id}</option>
+                    <option
+                      key={b.id}
+                      value={b.id}
+                      disabled={!isSimulatorBackendCompatible(simulator, b.id as InferenceBackend)}
+                    >
+                      {BACKEND_LABELS[b.id] ?? b.id}
+                    </option>
                   ))}
                 </select>
               </div>

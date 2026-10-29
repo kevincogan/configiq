@@ -16,9 +16,9 @@ import { recordErrorCode } from '@/lib/otel-metrics'
 // client below is gatewayTimeoutSeconds() — the longer recommend/predict timeout.
 const DEFAULT_TIMEOUT_SECONDS = 30
 
-function catalogResponse(systems: unknown[], models: unknown[], backends: unknown[]) {
+function catalogResponse(systems: unknown[], models: unknown[], backends: unknown[], networks: string[]) {
   return NextResponse.json(
-    { systems, models, backends, timeoutSeconds: gatewayTimeoutSeconds() },
+    { systems, models, backends, networks, timeoutSeconds: gatewayTimeoutSeconds() },
     {
       status: 200,
       headers: {
@@ -31,7 +31,7 @@ function catalogResponse(systems: unknown[], models: unknown[], backends: unknow
   )
 }
 
-function catalogList(data: unknown, key: 'systems' | 'models' | 'backends'): unknown[] | null {
+function catalogList(data: unknown, key: 'systems' | 'models' | 'backends' | 'networks'): unknown[] | null {
   if (!data || typeof data !== 'object') return null
   const value = (data as Record<string, unknown>)[key]
   return Array.isArray(value) ? value : null
@@ -129,11 +129,13 @@ export async function GET(request: Request) {
       const systems = catalogList(catalogData, 'systems')
       const models = catalogList(catalogData, 'models')
       const backends = catalogList(catalogData, 'backends') ?? []
+      const networks = (catalogList(catalogData, 'networks') ?? [])
+        .filter((network): network is string => typeof network === 'string')
       if (!systems || !models || !validCatalogEntries(systems, models, backends)) return invalidCatalogResponse()
-      return catalogResponse(systems, models, backends)
+      return catalogResponse(systems, models, backends, networks)
     }
 
-    const [systemsRes, modelsRes, backendsResult] = await Promise.all([
+    const [systemsRes, modelsRes, backendsResult, networksResult] = await Promise.all([
       fetch(`${baseUrl}/systems?include=specs`, {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
@@ -145,6 +147,11 @@ export async function GET(request: Request) {
         signal: AbortSignal.timeout(timeoutSeconds * 1000),
       }),
       fetch(`${baseUrl}/backends`, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        signal: AbortSignal.timeout(timeoutSeconds * 1000),
+      }).then(response => ({ response })).catch(() => ({ response: null })),
+      fetch(`${baseUrl}/networks`, {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
         signal: AbortSignal.timeout(timeoutSeconds * 1000),
@@ -186,11 +193,22 @@ export async function GET(request: Request) {
       }
     }
 
+    let networks: string[] = []
+    if (networksResult.response?.ok) {
+      try {
+        const networksData: unknown = await networksResult.response.json()
+        networks = (catalogList(networksData, 'networks') ?? [])
+          .filter((network): network is string => typeof network === 'string' && network.trim().length > 0)
+      } catch {
+        networks = []
+      }
+    }
+
     const systems = catalogList(systemsData, 'systems')
     const models = catalogList(modelsData, 'models')
     const backends = catalogList(backendsData, 'backends') ?? []
     if (!systems || !models || !validCatalogEntries(systems, models, backends)) return invalidCatalogResponse()
-    return catalogResponse(systems, models, backends)
+    return catalogResponse(systems, models, backends, networks)
   } catch (err: unknown) {
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
       recordErrorCode('/api/catalog', 'AISIM_TIMEOUT', 504)

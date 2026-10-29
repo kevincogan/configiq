@@ -41,14 +41,14 @@ beforeEach(async () => {
   vi.mocked(useCatalog).mockReturnValue({
     gpuOptions: [{ systemId: 'l40s', label: 'NVIDIA L40S', tdpWatts: 350 } as GpuOption],
     modelOptions: ['Qwen/Qwen3-8B', 'unpriced/model'],
-    modelSpecs: new Map(), backendOptions: [], timeoutSeconds: 180,
+    modelSpecs: new Map(), backendOptions: [], networkOptions: [], timeoutSeconds: 180,
     isLoading: false, error: null,
   })
   vi.mocked(useSettings).mockReturnValue({
     hydrated: true, defaultModel: 'Qwen/Qwen3-8B', testedModels: [],
-    hfToken: '', backendVersion: '', inferenceBackend: 'vllm',
+    hfToken: '', backendVersion: '', inferenceBackend: 'vllm', simulator: 'aisimulate',
     costingsEnabled: true, preferredCloudProvider: null, pricingSource: 'merged',
-    setDefaultModel: vi.fn(), setHfToken: vi.fn(), setInferenceBackend: vi.fn(),
+    setDefaultModel: vi.fn(), setHfToken: vi.fn(), setInferenceBackend: vi.fn(), setSimulator: vi.fn(),
     setBackendVersion: vi.fn(), setCostingsEnabled: vi.fn(), setPreferredCloudProvider: vi.fn(),
     setPricingSource: vi.fn(),
   })

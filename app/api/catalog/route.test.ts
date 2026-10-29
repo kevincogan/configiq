@@ -13,6 +13,7 @@ describe('GET /api/catalog', () => {
       '/systems?include=specs': { systems: [{ id: 'h200_sxm' }] },
       '/models?include=specs': { models: [{ id: 'Qwen/Qwen3-8B' }] },
       '/backends': { backends: [{ id: 'vllm' }, { id: 'sglang' }, { id: 'tensorrt-llm' }] },
+      '/networks': { networks: ['ib-400g', 'roce-200g'] },
     }
     const fetchMock = vi.fn((url: string) => {
       const path = new URL(url).pathname + new URL(url).search
@@ -27,8 +28,9 @@ describe('GET /api/catalog', () => {
       systems: [{ id: 'h200_sxm' }],
       models: [{ id: 'Qwen/Qwen3-8B' }],
       backends: [{ id: 'vllm' }, { id: 'sglang' }, { id: 'tensorrt-llm' }],
+      networks: ['ib-400g', 'roce-200g'],
     })
-    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(fetchMock).toHaveBeenCalledTimes(4)
   })
 
   it('preserves backends when using a combined ConfigIQ catalogue gateway', async () => {
@@ -37,6 +39,7 @@ describe('GET /api/catalog', () => {
       systems: [{ id: 'h200_sxm' }],
       models: ['Qwen/Qwen3-8B'],
       backends: [{ id: 'vllm' }],
+      networks: ['ib-400g'],
     })))
     vi.stubGlobal('fetch', fetchMock)
 
@@ -47,6 +50,7 @@ describe('GET /api/catalog', () => {
       systems: [{ id: 'h200_sxm' }],
       models: ['Qwen/Qwen3-8B'],
       backends: [{ id: 'vllm' }],
+      networks: ['ib-400g'],
     })
     expect(fetchMock).toHaveBeenCalledWith('https://configiq.dev/api/catalog', expect.any(Object))
   })

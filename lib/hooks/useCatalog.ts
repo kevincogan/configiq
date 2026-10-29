@@ -124,6 +124,7 @@ export interface Catalog {
   modelOptions: string[]
   modelSpecs: Map<string, ModelSpec>
   backendOptions: BackendOption[]
+  networkOptions: string[]
   /** Effective AISimulators request timeout (seconds) reported by the server; falls back
    *  to DEFAULT_GATEWAY_TIMEOUT_SECONDS until the catalog resolves. */
   timeoutSeconds: number
@@ -155,12 +156,13 @@ let cachedGpus: GpuOption[] | null = null
 let cachedModels: string[] | null = null
 let cachedModelSpecs: Map<string, ModelSpec> | null = null
 let cachedBackends: BackendOption[] | null = null
+let cachedNetworks: string[] | null = null
 let cachedTimeoutSeconds: number = DEFAULT_GATEWAY_TIMEOUT_SECONDS
 let cacheTimestamp: number | null = null
 let fetchPromise: Promise<void> | null = null
 
 function isCacheValid(): boolean {
-  return cachedGpus !== null && cachedModels !== null && cachedModelSpecs !== null && cachedBackends !== null &&
+  return cachedGpus !== null && cachedModels !== null && cachedModelSpecs !== null && cachedBackends !== null && cachedNetworks !== null &&
     cacheTimestamp !== null && Date.now() - cacheTimestamp < CLIENT_CACHE_TTL_MS.catalog
 }
 
@@ -169,6 +171,7 @@ export function useCatalog(): Catalog {
   const [modelOptions, setModelOptions] = useState<string[]>(isCacheValid() ? cachedModels! : [])
   const [modelSpecs, setModelSpecs] = useState<Map<string, ModelSpec>>(isCacheValid() ? cachedModelSpecs! : new Map())
   const [backendOptions, setBackendOptions] = useState<BackendOption[]>(isCacheValid() ? cachedBackends! : [])
+  const [networkOptions, setNetworkOptions] = useState<string[]>(isCacheValid() ? cachedNetworks! : [])
   const [timeoutSeconds, setTimeoutSeconds] = useState<number>(cachedTimeoutSeconds)
   const [isLoading, setIsLoading] = useState(!isCacheValid())
   const [error, setError] = useState<string | null>(null)
@@ -179,6 +182,7 @@ export function useCatalog(): Catalog {
       setModelOptions(cachedModels!)
       setModelSpecs(cachedModelSpecs!)
       setBackendOptions(cachedBackends!)
+      setNetworkOptions(cachedNetworks!)
       setTimeoutSeconds(cachedTimeoutSeconds)
       setIsLoading(false)
       return
@@ -203,6 +207,9 @@ export function useCatalog(): Catalog {
 
           const rawModels = (data.models ?? []) as unknown[]
           const backendList = (data.backends ?? []) as Record<string, unknown>[]
+          const networks = Array.isArray(data.networks)
+            ? data.networks.filter((network: unknown): network is string => typeof network === 'string' && network.trim().length > 0)
+            : []
           const backends: BackendOption[] = backendList.flatMap(backend => {
             const option = mapBackendOption(backend)
             return option ? [option] : []
@@ -227,6 +234,7 @@ export function useCatalog(): Catalog {
           cachedModels = modelList
           cachedModelSpecs = specsMap
           cachedBackends = backends
+          cachedNetworks = networks
           if (typeof data.timeoutSeconds === 'number' && data.timeoutSeconds > 0) {
             cachedTimeoutSeconds = data.timeoutSeconds
           }
@@ -241,6 +249,7 @@ export function useCatalog(): Catalog {
           setModelOptions(cachedModels!)
           setModelSpecs(cachedModelSpecs!)
           setBackendOptions(cachedBackends!)
+          setNetworkOptions(cachedNetworks!)
           setTimeoutSeconds(cachedTimeoutSeconds)
         }
       } catch (err) {
@@ -257,5 +266,5 @@ export function useCatalog(): Catalog {
     return () => { cancelled = true }
   }, [])
 
-  return { gpuOptions, modelOptions, modelSpecs, backendOptions, timeoutSeconds, isLoading, error }
+  return { gpuOptions, modelOptions, modelSpecs, backendOptions, networkOptions, timeoutSeconds, isLoading, error }
 }
