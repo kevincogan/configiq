@@ -122,6 +122,14 @@ class SupportManifest:
             )
         return hardware
 
+    def resolve_network(self, network: str) -> str:
+        if network not in self.networks:
+            available = ", ".join(sorted(self.networks)) or "none"
+            raise BlisUnsupportedRequest(
+                f"BLIS cannot price network fabric {network!r}; available fabric keys: {available}"
+            )
+        return network
+
 
 @lru_cache(maxsize=4)
 def _load_manifest(path: str) -> SupportManifest:

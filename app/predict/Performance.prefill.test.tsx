@@ -29,6 +29,7 @@ vi.mock('@/lib/hooks/useCatalog', () => ({
     ],
     modelOptions: ['Qwen/Qwen2.5-7B-Instruct', 'settings/default-model'],
     modelSpecs: new Map(),
+    networkOptions: ['ib-400g'],
     isLoading: false,
   }),
 }));
@@ -120,13 +121,16 @@ import { useSettings } from '@/contexts/SettingsContext';
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 
-const makeSettings = (costingsEnabled: boolean): ReturnType<typeof useSettings> => ({
+const makeSettings = (
+  costingsEnabled: boolean,
+  simulator: 'aisimulate' | 'blis' = 'aisimulate',
+): ReturnType<typeof useSettings> => ({
   hydrated: true,
   defaultModel: 'settings/default-model',
   testedModels: [],
   hfToken: '',
   inferenceBackend: 'vllm',
-  simulator: 'aisimulate',
+  simulator,
   backendVersion: 'latest',
   costingsEnabled,
   preferredCloudProvider: 'aws.us-east-1',
@@ -208,6 +212,7 @@ beforeEach(() => {
     ok: true,
     json: async () => ({ data: [] }),
   })));
+  vi.mocked(fetchEstimateAsInferenceResult).mockClear();
   vi.mocked(fetchEstimateAsInferenceResult).mockResolvedValue(estimateResult);
   container = document.createElement('div');
   document.body.append(container);
@@ -265,6 +270,45 @@ describe('performance page widget handoff', () => {
     expect(container.querySelector('[data-term="ttft"]')).not.toBeNull();
     expect(container.querySelector('[data-term="concurrent"]')).not.toBeNull();
     expect(container.querySelector('[data-term="tpot"]')).not.toBeNull();
+  });
+
+  it('forwards the selected network fabric for BLIS disaggregated predictions', async () => {
+    vi.mocked(useSettings).mockReturnValue(makeSettings(false, 'blis'));
+    expect(useSettings().simulator).toBe('blis');
+    await mountAt('?model=Qwen%2FQwen2.5-7B-Instruct&system=h100_sxm');
+
+    await act(async () => {
+      Array.from(container.querySelectorAll('button'))
+        .find(button => button.textContent === 'Disaggregated')?.click();
+    });
+    await act(async () => {
+      const fabric = container.querySelector<HTMLSelectElement>('#predict-network-fabric');
+      expect(fabric).not.toBeNull();
+      if (fabric) {
+        fabric.value = 'ib-400g';
+        fabric.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    });
+    expect(container.querySelector<HTMLSelectElement>('#predict-network-fabric')?.value).toBe('ib-400g');
+    await act(async () => {
+      const calculate = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find(button => button.textContent === 'Calculate');
+      expect(calculate?.disabled).toBe(false);
+      calculate?.click();
+    });
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    });
+
+    expect(fetchEstimateAsInferenceResult).toHaveBeenCalledOnce();
+    const input = vi.mocked(fetchEstimateAsInferenceResult).mock.calls[0][0];
+    expect(input).toMatchObject({
+      simulator: 'blis',
+      mode: 'disagg',
+      fabric: 'ib-400g',
+      prefill: { workers: 1 },
+      decode: { workers: 1 },
+    });
   });
 
   it('renders separate cloud and on-prem cost tiles', async () => {

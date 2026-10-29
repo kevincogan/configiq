@@ -41,7 +41,7 @@ beforeEach(async () => {
   vi.mocked(useCatalog).mockReturnValue({
     gpuOptions: [{ systemId: 'l40s', label: 'NVIDIA L40S', tdpWatts: 350 } as GpuOption],
     modelOptions: ['Qwen/Qwen3-8B', 'unpriced/model'],
-    modelSpecs: new Map(), backendOptions: [], timeoutSeconds: 180,
+    modelSpecs: new Map(), backendOptions: [], networkOptions: [], timeoutSeconds: 180,
     isLoading: false, error: null,
   })
   vi.mocked(useSettings).mockReturnValue({

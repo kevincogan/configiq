@@ -18,6 +18,9 @@ export interface RecommendSearchSummary {
   effective_max_gpus: number
   time_budget_seconds: number
   budget_exhausted: boolean
+  modes_searched?: string[]
+  candidate_configurations?: number
+  evaluated_configurations?: number
 }
 
 export type ServingMode = 'agg' | 'disagg'
@@ -230,6 +233,7 @@ export async function callRecommend(
       )
     }
     externalPayload.search_budget_seconds = blisSearchBudgetSeconds
+    if (request.fabric !== undefined) externalPayload.fabric = request.fabric
   }
 
   if (request.max_seq_len != null) externalPayload.max_seq_len = request.max_seq_len
@@ -349,6 +353,15 @@ export async function callRecommend(
         effective_max_gpus: typeof searchSummaryRaw.effective_max_gpus === 'number' ? searchSummaryRaw.effective_max_gpus : 0,
         time_budget_seconds: typeof searchSummaryRaw.time_budget_seconds === 'number' ? searchSummaryRaw.time_budget_seconds : 0,
         budget_exhausted: searchSummaryRaw.budget_exhausted === true,
+        modes_searched: Array.isArray(searchSummaryRaw.modes_searched)
+          ? searchSummaryRaw.modes_searched.filter((mode): mode is string => typeof mode === 'string')
+          : undefined,
+        candidate_configurations: typeof searchSummaryRaw.candidate_configurations === 'number'
+          ? searchSummaryRaw.candidate_configurations
+          : undefined,
+        evaluated_configurations: typeof searchSummaryRaw.evaluated_configurations === 'number'
+          ? searchSummaryRaw.evaluated_configurations
+          : undefined,
       }
     : undefined
 

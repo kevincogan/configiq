@@ -35,7 +35,7 @@ from aisimulate_core.sdk.memory import estimate_kv_cache
 from aisimulate_core.sdk.perf_database import get_supported_databases, get_version_slots, load_system_spec
 from aisimulate_core.sdk.utils import get_model_config_from_model_path
 
-from .blis.manifest import BlisManifestError, BlisUnsupportedRequest
+from .blis.manifest import BlisManifestError, BlisUnsupportedRequest, load_support_manifest
 from .blis.runner import BlisExecutionError, BlisTimeoutError
 from .blis.service import EstimateInput as BlisEstimateInput
 from .blis.service import RecommendInput as BlisRecommendInput
@@ -101,7 +101,11 @@ class RecommendRequest(BaseModel):
         description="Pre-fetched HuggingFace model config.json. Skips HF download. "
         "Leave null to let the service resolve the model from HuggingFace.",
     )
-
+    fabric: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Inter-node fabric for P/D candidates. BLIS defaults to roce-200g; explicit null searches aggregate candidates only. AISimulate does not consume this field.",
+    )
     model_config = {"populate_by_name": True}
     simulator: Literal["aisimulate", "blis"] = Field(default="aisimulate", description="Simulator to use.")
 
@@ -117,6 +121,10 @@ class RecommendRequest(BaseModel):
             and self.min_candidate_gpus > self.max_candidate_gpus
         ):
             raise ValueError("min_candidate_gpus cannot exceed max_candidate_gpus.")
+        if self.simulator == "aisimulate" and self.fabric is not None:
+            raise ValueError("AISimulate does not currently consume a network-fabric selection")
+        if self.simulator == "blis" and "fabric" not in self.model_fields_set:
+            self.fabric = "roce-200g"
         return self
 
 
@@ -183,9 +191,20 @@ class EstimateRequest(BaseModel):
         description="Pre-fetched HuggingFace model config.json. Skips HF download. "
         "Leave null to let the service resolve the model from HuggingFace.",
     )
+    fabric: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Inter-node fabric for P/D transfer. BLIS uses this field; AISimulate does not consume it.",
+    )
 
     model_config = {"populate_by_name": True}
     simulator: Literal["aisimulate", "blis"] = Field(default="aisimulate", description="Simulator to use.")
+
+    @model_validator(mode="after")
+    def reject_aisimulate_fabric(self):
+        if self.simulator == "aisimulate" and self.fabric is not None:
+            raise ValueError("AISimulate does not currently consume a network-fabric selection")
+        return self
 
 
 class MemoryBreakdown(BaseModel):
@@ -1248,7 +1267,7 @@ def post_recommend(
             raise HTTPException(status_code=422, detail="No configuration meets the specified requirements.")
         return RecommendResponse(
             configs=[RecommendConfig.model_validate(config) for config in outcome.configs],
-            chosen_mode="agg",
+            chosen_mode=str(outcome.configs[0].get("mode", "agg")),
             simulator="blis",
             search_summary=outcome.search_summary,
         )
@@ -1322,16 +1341,18 @@ def _handle_blis_error(error: Exception) -> None:
 
 
 def _blis_estimate(req: EstimateRequest):
-    unsupported_options = tuple(
-        name
-        for name, value in {
-            "database_mode": req.database_mode if req.database_mode != "HYBRID" else None,
-            "requests_per_load_unit": req.requests_per_load_unit,
+    unsupported_values: dict[str, Any] = {
+        "database_mode": req.database_mode if req.database_mode != "HYBRID" else None,
+        "requests_per_load_unit": req.requests_per_load_unit,
+    }
+    if req.mode != "disagg":
+        unsupported_values.update({
+            "decode_system": req.decode_system,
+            "fabric": req.fabric,
             "prefill_max_seq_len": req.prefill_max_seq_len,
             "decode_max_seq_len": req.decode_max_seq_len,
             "prefill_gpu_memory_utilization": req.prefill_gpu_memory_utilization,
             "decode_gpu_memory_utilization": req.decode_gpu_memory_utilization,
-            "decode_system": req.decode_system,
             "prefill_tp_size": req.prefill_tp_size,
             "prefill_pp_size": req.prefill_pp_size,
             "prefill_moe_tp_size": req.prefill_moe_tp_size,
@@ -1344,7 +1365,10 @@ def _blis_estimate(req: EstimateRequest):
             "decode_moe_ep_size": req.decode_moe_ep_size,
             "decode_batch_size": req.decode_batch_size,
             "decode_num_workers": req.decode_num_workers,
-        }.items()
+        })
+    unsupported_options = tuple(
+        name
+        for name, value in unsupported_values.items()
         if value is not None
     )
     return run_blis_estimate(BlisEstimateInput(
@@ -1370,6 +1394,25 @@ def _blis_estimate(req: EstimateRequest):
         prefix=req.prefix,
         prefix_caching=req.prefix_caching,
         enable_chunked_prefill=req.enable_chunked_prefill,
+        mode=req.mode,
+        decode_system=req.decode_system,
+        fabric=req.fabric,
+        prefill_max_seq_len=req.prefill_max_seq_len,
+        decode_max_seq_len=req.decode_max_seq_len,
+        prefill_gpu_memory_utilization=req.prefill_gpu_memory_utilization,
+        decode_gpu_memory_utilization=req.decode_gpu_memory_utilization,
+        prefill_tp_size=req.prefill_tp_size,
+        prefill_pp_size=req.prefill_pp_size,
+        prefill_moe_tp_size=req.prefill_moe_tp_size,
+        prefill_moe_ep_size=req.prefill_moe_ep_size,
+        prefill_batch_size=req.prefill_batch_size,
+        prefill_num_workers=req.prefill_num_workers,
+        decode_tp_size=req.decode_tp_size,
+        decode_pp_size=req.decode_pp_size,
+        decode_moe_tp_size=req.decode_moe_tp_size,
+        decode_moe_ep_size=req.decode_moe_ep_size,
+        decode_batch_size=req.decode_batch_size,
+        decode_num_workers=req.decode_num_workers,
         model_config_provided=req.model_config_data is not None,
         unsupported_options=unsupported_options,
     ))
@@ -1397,6 +1440,9 @@ def _blis_recommend(req: RecommendRequest):
         top_n=req.top_n,
         search_budget_seconds=req.search_budget_seconds,
         max_seq_len=req.max_seq_len,
+        prefill_max_seq_len=req.prefill_max_seq_len,
+        decode_max_seq_len=req.decode_max_seq_len,
+        fabric=req.fabric,
         database_mode=req.database_mode,
         inclusive_tpot=req.inclusive_tpot,
         model_config_provided=req.model_config_data is not None,
@@ -1435,11 +1481,6 @@ def post_predict(
         except Exception as e:
             _common_error_handler(e, "estimate", req.model_path, req.backend, req.system)
     else:
-        if is_disagg:
-            raise HTTPException(
-                status_code=422,
-                detail="BLIS does not support disaggregated predictions; select AISimulate explicitly to use it.",
-            )
         try:
             prediction = _blis_estimate(req)
         except (BlisUnsupportedRequest, BlisManifestError, BlisExecutionError) as e:
@@ -1491,6 +1532,9 @@ def post_predict(
     if req.simulator == "blis":
         if "config" in includes and getattr(prediction, "serving_config", None):
             resp.serving_config = ServingConfig.model_validate(prediction.serving_config)
+        if is_disagg:
+            resp.prefill_config = WorkerConfig.model_validate(prediction.prefill_config)
+            resp.decode_config = WorkerConfig.model_validate(prediction.decode_config)
         if "memory" in includes:
             resp.memory_unavailable_reason = "The selected simulator does not provide a KV-cache memory breakdown."
         return resp
@@ -1689,6 +1733,15 @@ def get_systems(
                 logger.warning("failed to load spec for %s", sys_id)
         systems.append(entry)
     return {"systems": systems}
+
+
+@app.get("/networks")
+def get_networks():
+    """List network fabrics available to network-aware simulators."""
+    try:
+        return {"networks": sorted(load_support_manifest().networks), "simulator": "blis"}
+    except BlisManifestError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/metrics")

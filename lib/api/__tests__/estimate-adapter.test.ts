@@ -95,6 +95,41 @@ describe('fetchEstimateAsInferenceResult - request body construction', () => {
     expect(body.simulator).toBe('blis')
   })
 
+  it('forwards the selected fabric and per-pool settings for BLIS P/D', async () => {
+    const mockFetch = mockFetchOk({
+      ...VALID_RESPONSE,
+      simulator: 'blis',
+      mode: 'disagg',
+      memory_breakdown: null,
+      memory_unavailable_reason: 'No memory breakdown.',
+      prefill_config: { tp: 4, pp: 1, num_workers: 2, batch_size: 8 },
+      decode_config: { tp: 2, pp: 1, num_workers: 1, batch_size: 8 },
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const result = await fetchEstimateAsInferenceResult({
+      ...VALID_INPUT,
+      simulator: 'blis',
+      mode: 'disagg',
+      fabric: 'ib-400g',
+      prefill: { tp: 4, pp: 1, workers: 2, batch: 8 },
+      decode: { tp: 2, pp: 1, workers: 1, batch: 8 },
+    })
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body as string)
+    expect(body).toMatchObject({
+      simulator: 'blis',
+      mode: 'disagg',
+      fabric: 'ib-400g',
+      prefill_tp_size: 4,
+      prefill_num_workers: 2,
+      decode_tp_size: 2,
+      decode_num_workers: 1,
+    })
+    expect(result.mode).toBe('disagg')
+    expect(result.disagg?.prefill.workers).toBe(2)
+  })
+
   it('rejects a BLIS request when the API does not confirm BLIS provenance', async () => {
     vi.stubGlobal('fetch', mockFetchOk(VALID_RESPONSE))
 

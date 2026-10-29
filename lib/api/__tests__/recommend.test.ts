@@ -73,6 +73,31 @@ const BLIS_EXTERNAL_RESPONSE = {
   }],
 }
 
+const BLIS_PD_EXTERNAL_RESPONSE = {
+  ...BLIS_EXTERNAL_RESPONSE,
+  chosen_mode: 'disagg',
+  search_summary: {
+    ...BLIS_EXTERNAL_RESPONSE.search_summary,
+    strategy: 'aggregate_tp_and_pd_grid',
+    modes_searched: ['agg', 'disagg'],
+    candidate_configurations: 32,
+    evaluated_configurations: 10,
+  },
+  configs: [{
+    ...BLIS_EXTERNAL_RESPONSE.configs[0],
+    total_gpus_needed: 6,
+    num_total_gpus: 6,
+    mode: 'disagg',
+    tp: null,
+    pp: null,
+    dp: null,
+    prefill_config: { tp: 4, pp: 1, dp: 1, num_workers: 1, batch_size: 32 },
+    decode_config: { tp: 2, pp: 1, dp: 1, num_workers: 1, batch_size: 32 },
+    memory: null,
+    memory_breakdown: null,
+  }],
+}
+
 function mockFetchOk(data: unknown) {
   return vi.fn().mockResolvedValue({
     ok: true,
@@ -126,9 +151,18 @@ describe('RecommendRequestSchema', () => {
     const result = RecommendRequestSchema.safeParse({
       ...VALID_REQUEST,
       simulator: 'blis',
+      fabric: 'ib-400g',
     })
     expect(result.success).toBe(true)
-    if (result.success) expect(result.data.simulator).toBe('blis')
+    if (result.success) expect(result.data).toMatchObject({ simulator: 'blis', fabric: 'ib-400g' })
+  })
+
+  it('rejects BLIS-only fabric selection with AISimulate', () => {
+    const result = RecommendRequestSchema.safeParse({
+      ...VALID_REQUEST,
+      fabric: 'ib-400g',
+    })
+    expect(result.success).toBe(false)
   })
 
   it('defaults simulator to aisimulate', () => {
@@ -412,11 +446,22 @@ describe('callRecommend', () => {
     const mockFetch = mockFetchOk(EXTERNAL_RESPONSE)
     vi.stubGlobal('fetch', mockFetch)
 
-    await callRecommend({ ...VALID_REQUEST, simulator: 'blis' }, { timeoutSeconds: 45 })
+    await callRecommend({ ...VALID_REQUEST, simulator: 'blis', fabric: 'ib-400g' }, { timeoutSeconds: 45 })
 
     const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body)
     expect(sentBody.simulator).toBe('blis')
+    expect(sentBody.fabric).toBe('ib-400g')
     expect(sentBody.search_budget_seconds).toBe(40)
+  })
+
+  it('preserves an explicit aggregate-only fabric opt-out', async () => {
+    const mockFetch = mockFetchOk(BLIS_EXTERNAL_RESPONSE)
+    vi.stubGlobal('fetch', mockFetch)
+
+    await callRecommend({ ...VALID_REQUEST, simulator: 'blis', fabric: null })
+
+    const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body)
+    expect(sentBody).toHaveProperty('fabric', null)
   })
 
   it('rejects a BLIS request when the API does not confirm BLIS provenance', async () => {
@@ -439,6 +484,22 @@ describe('callRecommend', () => {
       expect(result.memoryAvailable).toBe(false)
       expect(result.warnings[0]?.message).toContain('different_quantization')
       expect(result.searchSummary?.evaluated_gpus).toEqual([1, 2])
+    }
+  })
+
+  it('normalizes a BLIS P/D recommendation and its searched modes', async () => {
+    vi.stubGlobal('fetch', mockFetchOk(BLIS_PD_EXTERNAL_RESPONSE))
+
+    const result = await callRecommend({ ...VALID_REQUEST, simulator: 'blis', fabric: 'ib-400g' })
+
+    expect(result.status).toBe('completed')
+    if (result.status === 'completed') {
+      expect(result.mode).toBe('disagg')
+      expect(result.recommendation.gpusNeeded).toBe(6)
+      expect(result.phases.prefill?.tensorParallelSize).toBe(4)
+      expect(result.phases.decode?.tensorParallelSize).toBe(2)
+      expect(result.searchSummary?.modes_searched).toEqual(['agg', 'disagg'])
+      expect(result.searchSummary?.evaluated_configurations).toBe(10)
     }
   })
 

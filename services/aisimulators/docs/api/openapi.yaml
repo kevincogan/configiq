@@ -18,7 +18,7 @@ tags:
   - name: sizing
     description: GPU recommendation, performance estimation, and memory estimation
   - name: catalog
-    description: Supported models and GPU systems
+    description: Supported models, GPU systems, and network fabrics
   - name: observability
     description: Service metrics
 
@@ -35,9 +35,10 @@ paths:
         targets (SLA), finds a deployment that meets the constraints. With
         `simulator=aisimulate`, searches parallelism configurations (TP/PP/DP/EP)
         and serving modes (aggregated and disaggregated). With `simulator=blis`,
-        searches tensor-parallel sizes only for concurrency workloads on a
-        single node; unsupported requests return an error instead of falling
-        back to AISimulate.
+        searches aggregate TP candidates for concurrency workloads. Supplying a
+        `fabric` from `/networks` also enables a bounded grid of P/D TP and
+        worker-count candidates, with one node per pool. Unsupported requests
+        return an error instead of falling back to AISimulate.
 
         The AISimulate path wraps `cli_recommend()` from the aisimulate SDK.
         The BLIS path generates a temporary Scenario and Deployment and runs the
@@ -99,8 +100,12 @@ paths:
         its performance. Use `/recommend` when you want to find the optimal config.
 
         With `simulator=aisimulate`, wraps `cli_estimate()` from the aisimulate
-        SDK. With `simulator=blis`, runs a generated aggregate vLLM scenario;
-        unsupported settings return an error instead of falling back to
+        SDK. With `simulator=blis`, runs a generated vLLM scenario. Aggregated
+        and prefill/decode disaggregated predictions are supported; P/D requests
+        require an explicit `fabric` from `GET /networks`, matching GPU systems
+        for both pools, and DP=1. The BLIS path creates dedicated prefill and
+        decode pools, NIXL transfer, and an always-disaggregate router profile.
+        Unsupported settings return an error instead of falling back to
         AISimulate. BLIS results do not include a KV-cache memory breakdown.
 
         Use the `include` query parameter to enrich the result with optional
@@ -227,6 +232,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SystemListResponse'
+
+  /networks:
+    get:
+      operationId: listNetworks
+      tags: [catalog]
+      summary: List supported network fabrics
+      description: |
+        Returns network fabric identifiers available to network-aware simulations,
+        including prefill/decode KV transfer. Network fabric modeling is currently
+        provided by BLIS; AISimulate does not consume this catalog.
+      responses:
+        '200':
+          description: Available network fabrics
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [networks, simulator]
+                properties:
+                  networks:
+                    type: array
+                    items: { type: string }
+                  simulator:
+                    type: string
+                    enum: [blis]
+                    description: Simulator providing the current network-fabric catalog.
+        '503':
+          description: BLIS support manifest unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /metrics:
     get:
@@ -386,6 +423,11 @@ components:
           nullable: true
           description: Pre-fetched HuggingFace model config.json. Skips the HF download when supplied.
           default: null
+        fabric:
+          type: string
+          nullable: true
+          minLength: 1
+          description: Inter-node fabric for topology-aware P/D candidates. BLIS defaults to roce-200g when omitted; explicitly set null to skip P/D candidates. AISimulate does not consume this field.
 
     RecommendResponse:
       type: object
@@ -406,7 +448,7 @@ components:
         search_summary:
           type: object
           nullable: true
-          description: BLIS TP-only candidate list, actual evaluated points, and applied bounds.
+          description: Candidate GPU totals, modes, evaluated configurations, and applied bounds.
           properties:
             strategy: { type: string, example: tensor_parallel_only }
             candidate_gpus: { type: array, items: { type: integer } }
@@ -416,6 +458,9 @@ components:
             effective_max_gpus: { type: integer }
             time_budget_seconds: { type: number }
             budget_exhausted: { type: boolean }
+            modes_searched: { type: array, items: { type: string, enum: [agg, disagg] } }
+            candidate_configurations: { type: integer }
+            evaluated_configurations: { type: integer }
 
     RecommendConfig:
       type: object
@@ -674,6 +719,22 @@ components:
           nullable: true
           description: Backend version. Null uses the latest available.
           default: null
+        mode:
+          type: string
+          enum: [agg, disagg]
+          default: agg
+          description: Serving mode. BLIS supports P/D predictions with matching system IDs and attention_dp_size=1.
+        fabric:
+          type: string
+          nullable: true
+          minLength: 1
+          description: Inter-node fabric for P/D transfer; list values with GET /networks. BLIS consumes it; AISimulate does not.
+          default: null
+        decode_system:
+          type: string
+          nullable: true
+          description: Decode GPU system. BLIS requires it to match system.
+          default: null
         isl:
           type: integer
           description: Input sequence length (tokens).
@@ -686,6 +747,58 @@ components:
           type: integer
           description: Tensor parallel size.
           default: 1
+        prefill_max_seq_len:
+          type: integer
+          nullable: true
+          description: Prefill pool context limit for disaggregated predictions.
+        decode_max_seq_len:
+          type: integer
+          nullable: true
+          description: Decode pool context limit for disaggregated predictions.
+        prefill_gpu_memory_utilization:
+          type: number
+          nullable: true
+          description: Prefill pool GPU memory utilization.
+        decode_gpu_memory_utilization:
+          type: number
+          nullable: true
+          description: Decode pool GPU memory utilization.
+        prefill_tp_size:
+          type: integer
+          nullable: true
+        prefill_pp_size:
+          type: integer
+          nullable: true
+        prefill_moe_tp_size:
+          type: integer
+          nullable: true
+        prefill_moe_ep_size:
+          type: integer
+          nullable: true
+        prefill_batch_size:
+          type: integer
+          nullable: true
+        prefill_num_workers:
+          type: integer
+          nullable: true
+        decode_tp_size:
+          type: integer
+          nullable: true
+        decode_pp_size:
+          type: integer
+          nullable: true
+        decode_moe_tp_size:
+          type: integer
+          nullable: true
+        decode_moe_ep_size:
+          type: integer
+          nullable: true
+        decode_batch_size:
+          type: integer
+          nullable: true
+        decode_num_workers:
+          type: integer
+          nullable: true
         pp_size:
           type: integer
           description: Pipeline parallel size.
@@ -749,6 +862,18 @@ components:
         simulator:
           type: string
           enum: [aisimulate, blis]
+        mode:
+          type: string
+          enum: [agg, disagg]
+          description: Serving mode used for this prediction.
+        prefill_config:
+          nullable: true
+          description: Prefill pool configuration for disaggregated predictions.
+          $ref: '#/components/schemas/WorkerConfig'
+        decode_config:
+          nullable: true
+          description: Decode pool configuration for disaggregated predictions.
+          $ref: '#/components/schemas/WorkerConfig'
         provenance:
           $ref: '#/components/schemas/SimulatorProvenance'
         memory_unavailable_reason:

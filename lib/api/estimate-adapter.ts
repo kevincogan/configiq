@@ -47,6 +47,7 @@ export interface EstimateAdapterInput {
   simulator?: 'aisimulate' | 'blis'
   // Disagg: when mode='disagg', prefill/decode drive separate pools.
   mode?: 'agg' | 'disagg'
+  fabric?: string
   prefill?: EstimatePhaseInput
   decode?: EstimatePhaseInput
 }
@@ -141,6 +142,7 @@ export async function fetchEstimateAsInferenceResult(
   // mode='disagg' and returns prefill_config / decode_config.
   if (input.mode === 'disagg' && input.prefill && input.decode) {
     body.mode = 'disagg'
+    if (input.fabric) body.fabric = input.fabric
     body.prefill_tp_size = input.prefill.tp
     body.prefill_pp_size = input.prefill.pp
     body.prefill_num_workers = input.prefill.workers

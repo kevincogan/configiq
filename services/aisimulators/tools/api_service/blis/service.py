@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import tempfile
 import time
@@ -18,7 +19,13 @@ from .manifest import (
 )
 from .runner import BlisExecutionError, RunRequest, run_blis
 from .runtime import BlisRuntime, resolve_runtime
-from .scenario import ScenarioRequest, default_engine_version, normalize_weight_quantization, write_scenario
+from .scenario import (
+    ScenarioPoolRequest,
+    ScenarioRequest,
+    default_engine_version,
+    normalize_weight_quantization,
+    write_scenario,
+)
 
 _MAX_RECOMMEND_BUDGET_SECONDS = 60.0
 _DEFAULT_RUN_TIMEOUT_SECONDS = 60.0
@@ -48,6 +55,25 @@ class EstimateInput:
     prefix: int = 0
     prefix_caching: bool | None = None
     enable_chunked_prefill: bool | None = None
+    mode: str = "agg"
+    decode_system: str | None = None
+    fabric: str | None = None
+    prefill_max_seq_len: int | None = None
+    decode_max_seq_len: int | None = None
+    prefill_gpu_memory_utilization: float | None = None
+    decode_gpu_memory_utilization: float | None = None
+    prefill_tp_size: int | None = None
+    prefill_pp_size: int | None = None
+    prefill_moe_tp_size: int | None = None
+    prefill_moe_ep_size: int | None = None
+    prefill_batch_size: int | None = None
+    prefill_num_workers: int | None = None
+    decode_tp_size: int | None = None
+    decode_pp_size: int | None = None
+    decode_moe_tp_size: int | None = None
+    decode_moe_ep_size: int | None = None
+    decode_batch_size: int | None = None
+    decode_num_workers: int | None = None
     model_config_provided: bool = False
     unsupported_options: tuple[str, ...] = ()
 
@@ -71,6 +97,9 @@ class RecommendInput:
     top_n: int
     search_budget_seconds: int
     max_seq_len: int | None = None
+    prefill_max_seq_len: int | None = None
+    decode_max_seq_len: int | None = None
+    fabric: str | None = None
     database_mode: str = "HYBRID"
     inclusive_tpot: bool = False
     model_config_provided: bool = False
@@ -80,8 +109,10 @@ class RecommendInput:
 class BlisPrediction:
     summary: dict[str, float | None]
     provenance: dict[str, str | None]
-    serving_config: dict[str, Any]
+    serving_config: dict[str, Any] | None
     warnings: list[str]
+    prefill_config: dict[str, Any] | None = None
+    decode_config: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +120,17 @@ class BlisRecommendation:
     configs: list[dict[str, Any]]
     search_summary: dict[str, Any]
     provenance: dict[str, str | None]
+
+
+@dataclass(frozen=True)
+class _RecommendCandidate:
+    mode: str
+    total_gpus: int
+    tp: int | None = None
+    prefill_tp: int | None = None
+    prefill_workers: int = 1
+    decode_tp: int | None = None
+    decode_workers: int = 1
 
 
 @dataclass(frozen=True)
@@ -270,6 +312,8 @@ def _run_scenario(
     *,
     prefix: int,
     timeout_seconds: float,
+    prefill_instances: int = 0,
+    decode_instances: int = 0,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="configiq-blis-") as scenario_directory:
         filename = write_scenario(scenario_directory, scenario)
@@ -286,15 +330,155 @@ def _run_scenario(
                 # of one request per virtual user, matching its current input.
                 num_requests=scenario.concurrency,
                 prefix_tokens=prefix,
+                prefill_instances=prefill_instances,
+                decode_instances=decode_instances,
             ),
             timeout_seconds=timeout_seconds,
         )
+
+
+def _estimate_disagg(request: EstimateInput, resolved: _ResolvedRequest) -> BlisPrediction:
+    if request.decode_system and request.decode_system != request.system:
+        raise BlisUnsupportedRequest(
+            "BLIS scenarios use one cluster hardware type; decode_system must match system"
+        )
+    if not request.fabric:
+        raise BlisUnsupportedRequest("BLIS disaggregated predictions require an explicit fabric")
+    fabric = resolved.manifest.resolve_network(request.fabric)
+    if request.dp != 1:
+        raise BlisUnsupportedRequest("BLIS disaggregated predictions currently require attention_dp_size=1")
+    if request.prefix > 0 and request.prefix_caching is False:
+        raise BlisUnsupportedRequest("a shared prefix requires prefix caching to be enabled in BLIS")
+    gemm_quant_mode, moe_quant_mode = _weight_quantization(request.gemm_quant_mode, request.moe_quant_mode)
+
+    def make_pool(role: str) -> ScenarioPoolRequest:
+        is_prefill = role == "prefill"
+        tp = (
+            (request.prefill_tp_size if is_prefill else request.decode_tp_size)
+            or request.tp
+        )
+        pp = (
+            (request.prefill_pp_size if is_prefill else request.decode_pp_size)
+            or request.pp
+        )
+        moe_tp = (
+            (request.prefill_moe_tp_size if is_prefill else request.decode_moe_tp_size)
+            or request.moe_tp_size
+        )
+        moe_ep = (
+            (request.prefill_moe_ep_size if is_prefill else request.decode_moe_ep_size)
+            or request.moe_ep_size
+        )
+        workers = (request.prefill_num_workers if is_prefill else request.decode_num_workers) or 1
+        batch_size = (request.prefill_batch_size if is_prefill else request.decode_batch_size) or request.concurrency
+        context_length = (
+            (request.prefill_max_seq_len if is_prefill else request.decode_max_seq_len)
+            or request.max_seq_len
+            or request.isl + request.osl
+        )
+        memory_utilization = (
+            (request.prefill_gpu_memory_utilization if is_prefill else request.decode_gpu_memory_utilization)
+            if (request.prefill_gpu_memory_utilization if is_prefill else request.decode_gpu_memory_utilization) is not None
+            else request.gpu_memory_utilization
+        )
+        if min(tp, pp, workers, batch_size, context_length) < 1:
+            raise BlisUnsupportedRequest(f"BLIS {role} pool values must be positive integers")
+        nodes = math.ceil(workers * tp * pp / resolved.gpus_per_node)
+        return ScenarioPoolRequest(
+            role=role,
+            nodes=nodes,
+            tp=tp,
+            pp=pp,
+            dp=request.dp,
+            moe_tp_size=moe_tp,
+            moe_ep_size=moe_ep,
+            enable_expert_parallel=moe_ep is not None and moe_ep > 1,
+            max_model_len=context_length,
+            max_num_seqs=request.max_num_seqs or batch_size,
+            max_num_batched_tokens=max(8192, request.isl),
+            gpu_memory_utilization=memory_utilization,
+            weight_quantization=gemm_quant_mode,
+            moe_quantization=moe_quant_mode,
+            cache_dtype=request.kvcache_quant_mode,
+            prefix_caching=True if request.prefix > 0 and request.prefix_caching is None else request.prefix_caching,
+        )
+
+    prefill = make_pool("prefill")
+    decode = make_pool("decode")
+    base = ScenarioRequest(
+        model=resolved.model,
+        hardware=resolved.hardware,
+        system=request.system,
+        gpus_per_node=resolved.gpus_per_node,
+        engine_version=resolved.engine_version,
+        tp=1,
+        pp=1,
+        dp=1,
+        moe_tp_size=None,
+        moe_ep_size=None,
+        enable_expert_parallel=False,
+        isl=request.isl,
+        osl=request.osl,
+        concurrency=request.concurrency,
+        fabric=fabric,
+        prefill_pool=prefill,
+        decode_pool=decode,
+        enable_chunked_prefill=request.enable_chunked_prefill,
+        fmha_quantization=request.fmha_quant_mode,
+    )
+    scenario = base
+    metrics = _run_scenario(
+        resolved,
+        scenario,
+        prefix=request.prefix,
+        timeout_seconds=float(os.environ.get("BLIS_RUN_TIMEOUT_SECONDS", _DEFAULT_RUN_TIMEOUT_SECONDS)),
+        prefill_instances=request.prefill_num_workers or 1,
+        decode_instances=request.decode_num_workers or 1,
+    )
+    total_gpus = (
+        prefill.tp * prefill.pp * (request.prefill_num_workers or 1)
+        + decode.tp * decode.pp * (request.decode_num_workers or 1)
+    )
+
+    def pool_config(pool: ScenarioPoolRequest, workers: int, batch_size: int | None) -> dict[str, Any]:
+        return {
+            "tp": pool.tp,
+            "pp": pool.pp,
+            "dp": pool.dp,
+            "moe_tp": pool.moe_tp_size,
+            "moe_ep": pool.moe_ep_size,
+            "num_workers": workers,
+            "batch_size": batch_size or request.concurrency,
+            "backend_version": resolved.engine_version,
+        }
+
+    return BlisPrediction(
+        summary=_metrics_summary(metrics, total_gpus),
+        provenance=_provenance(resolved, request.model_path, request.system),
+        serving_config=None,
+        warnings=_model_warnings(resolved, model_config_provided=request.model_config_provided) + (
+            [f"Simulator marked {int(metrics['dropped_unservable'])} request(s) unservable."]
+            if isinstance(metrics.get("dropped_unservable"), (int, float)) and metrics["dropped_unservable"] > 0
+            else []
+        ),
+        prefill_config=pool_config(prefill, request.prefill_num_workers or 1, request.prefill_batch_size),
+        decode_config=pool_config(decode, request.decode_num_workers or 1, request.decode_batch_size),
+    )
 
 
 def estimate(request: EstimateInput) -> BlisPrediction:
     if request.unsupported_options:
         options = ", ".join(request.unsupported_options)
         raise BlisUnsupportedRequest(f"BLIS cannot represent these request options: {options}")
+    if request.mode == "disagg":
+        if request.decode_system and request.decode_system != request.system:
+            raise BlisUnsupportedRequest(
+                "BLIS scenarios use one cluster hardware type; decode_system must match system"
+            )
+        if not request.fabric:
+            raise BlisUnsupportedRequest("BLIS disaggregated predictions require an explicit fabric")
+        resolved = _resolve_request(request.model_path, request.system, request.backend, request.backend_version)
+        return _estimate_disagg(request, resolved)
     resolved = _resolve_request(request.model_path, request.system, request.backend, request.backend_version)
     if request.prefix > 0 and request.prefix_caching is False:
         raise BlisUnsupportedRequest("a shared prefix requires prefix caching to be enabled in BLIS")
@@ -338,6 +522,78 @@ def estimate(request: EstimateInput) -> BlisPrediction:
     )
 
 
+def _power_of_two_values(upper: int) -> list[int]:
+    values: list[int] = []
+    value = 1
+    while value <= upper:
+        values.append(value)
+        value *= 2
+    return values
+
+
+def _pd_pool_shapes(gpus_per_node: int) -> list[tuple[int, int]]:
+    """Return (TP, workers) shapes whose complete pool fits on one node."""
+    return [
+        (tp, workers)
+        for tp in _power_of_two_values(gpus_per_node)
+        for workers in _power_of_two_values(gpus_per_node // tp)
+    ]
+
+
+def _recommend_disagg_scenario(
+    resolved: _ResolvedRequest,
+    request: RecommendInput,
+    *,
+    concurrency: int,
+    prefill_tp: int,
+    prefill_workers: int,
+    decode_tp: int,
+    decode_workers: int,
+    fabric: str,
+) -> ScenarioRequest:
+    def pool(role: str, tp: int, workers: int) -> ScenarioPoolRequest:
+        role_context_length = request.prefill_max_seq_len if role == "prefill" else request.decode_max_seq_len
+        context_length = role_context_length or request.max_seq_len or request.isl + request.osl
+        return ScenarioPoolRequest(
+            role=role,
+            nodes=1,
+            tp=tp,
+            pp=1,
+            dp=1,
+            moe_tp_size=None,
+            moe_ep_size=None,
+            enable_expert_parallel=False,
+            max_model_len=context_length,
+            max_num_seqs=concurrency,
+            max_num_batched_tokens=max(8192, request.isl),
+            gpu_memory_utilization=None,
+            weight_quantization=None,
+            moe_quantization=None,
+            cache_dtype=None,
+            prefix_caching=True if request.prefix > 0 else None,
+        )
+
+    return ScenarioRequest(
+        model=resolved.model,
+        hardware=resolved.hardware,
+        system=request.system,
+        gpus_per_node=resolved.gpus_per_node,
+        engine_version=resolved.engine_version,
+        tp=1,
+        pp=1,
+        dp=1,
+        moe_tp_size=None,
+        moe_ep_size=None,
+        enable_expert_parallel=False,
+        isl=request.isl,
+        osl=request.osl,
+        concurrency=concurrency,
+        fabric=fabric,
+        prefill_pool=pool("prefill", prefill_tp, prefill_workers),
+        decode_pool=pool("decode", decode_tp, decode_workers),
+    )
+
+
 def recommend(request: RecommendInput) -> BlisRecommendation:
     if request.request_rate is not None:
         raise BlisUnsupportedRequest(
@@ -348,27 +604,61 @@ def recommend(request: RecommendInput) -> BlisRecommendation:
         raise BlisUnsupportedRequest("BLIS does not accept the AISimulate database_mode option")
     concurrency = request.concurrency or 1
     resolved = _resolve_request(request.model_path, request.system, request.backend, request.backend_version)
-    total_budget_seconds = min(max(request.search_budget_seconds, 1), int(_MAX_RECOMMEND_BUDGET_SECONDS))
-    upper = min(request.max_candidate_gpus or resolved.gpus_per_node, resolved.gpus_per_node)
+    include_disagg = bool(request.fabric)
+    fabric = resolved.manifest.resolve_network(request.fabric) if request.fabric else None
+    hardware_max = resolved.gpus_per_node * (2 if include_disagg else 1)
+    upper = min(request.max_candidate_gpus or hardware_max, hardware_max)
     lower = request.min_candidate_gpus or 1
     if lower > upper:
+        topology_limit = (
+            f"one node per pool ({resolved.gpus_per_node} GPUs each)"
+            if include_disagg
+            else f"single-node hardware limit {resolved.gpus_per_node} GPUs"
+        )
         raise BlisUnsupportedRequest(
             f"Requested minimum GPU count {lower} exceeds the effective BLIS search ceiling {upper} "
-            f"(configured limit {request.max_candidate_gpus}, single-node hardware limit {resolved.gpus_per_node})"
+            f"(configured limit {request.max_candidate_gpus}, {topology_limit})"
         )
-    candidates: list[int] = []
-    candidate = 1
-    while candidate <= upper:
-        if candidate >= lower:
-            candidates.append(candidate)
-        candidate *= 2
+
+    candidates = [
+        _RecommendCandidate(mode="agg", total_gpus=tp, tp=tp)
+        for tp in _power_of_two_values(min(resolved.gpus_per_node, upper))
+        if lower <= tp <= upper
+    ]
+    if include_disagg and fabric is not None:
+        pool_shapes = _pd_pool_shapes(resolved.gpus_per_node)
+        candidates.extend(
+            _RecommendCandidate(
+                mode="disagg",
+                total_gpus=prefill_tp * prefill_workers + decode_tp * decode_workers,
+                prefill_tp=prefill_tp,
+                prefill_workers=prefill_workers,
+                decode_tp=decode_tp,
+                decode_workers=decode_workers,
+            )
+            for prefill_tp, prefill_workers in pool_shapes
+            for decode_tp, decode_workers in pool_shapes
+            if lower <= prefill_tp * prefill_workers + decode_tp * decode_workers <= upper
+        )
+    candidates.sort(key=lambda item: (
+        item.total_gpus,
+        0 if item.mode == "agg" else 1,
+        abs(
+            (item.prefill_tp or 0) * item.prefill_workers
+            - (item.decode_tp or 0) * item.decode_workers
+        ),
+        item.prefill_tp or item.tp or 0,
+        item.decode_tp or 0,
+    ))
+
+    total_budget_seconds = min(max(request.search_budget_seconds, 1), int(_MAX_RECOMMEND_BUDGET_SECONDS))
     started = time.monotonic()
-    evaluated: list[int] = []
+    evaluated: list[_RecommendCandidate] = []
     feasible: list[dict[str, Any]] = []
     timed_out = False
     execution_failures: list[BlisExecutionError] = []
 
-    for tp in candidates:
+    for index, candidate in enumerate(candidates):
         remaining = total_budget_seconds - (time.monotonic() - started)
         if remaining <= 0:
             timed_out = True
@@ -377,36 +667,54 @@ def recommend(request: RecommendInput) -> BlisRecommendation:
             float(os.environ.get("BLIS_RUN_TIMEOUT_SECONDS", _DEFAULT_RUN_TIMEOUT_SECONDS)),
             remaining,
         )
-        scenario = _scenario_request(
-            resolved,
-            system=request.system,
-            isl=request.isl,
-            osl=request.osl,
-            concurrency=concurrency,
-            tp=tp,
-            pp=1,
-            dp=1,
-            moe_tp_size=None,
-            moe_ep_size=None,
-            max_seq_len=request.max_seq_len,
-            max_num_seqs=concurrency,
-            gpu_memory_utilization=None,
-            prefix_caching=True if request.prefix > 0 else None,
-        )
+        if candidate.mode == "agg":
+            scenario = _scenario_request(
+                resolved,
+                system=request.system,
+                isl=request.isl,
+                osl=request.osl,
+                concurrency=concurrency,
+                tp=candidate.tp or 1,
+                pp=1,
+                dp=1,
+                moe_tp_size=None,
+                moe_ep_size=None,
+                max_seq_len=request.max_seq_len,
+                max_num_seqs=concurrency,
+                gpu_memory_utilization=None,
+                prefix_caching=True if request.prefix > 0 else None,
+            )
+            prefill_instances = decode_instances = 0
+        else:
+            assert fabric is not None
+            scenario = _recommend_disagg_scenario(
+                resolved,
+                request,
+                concurrency=concurrency,
+                prefill_tp=candidate.prefill_tp or 1,
+                prefill_workers=candidate.prefill_workers,
+                decode_tp=candidate.decode_tp or 1,
+                decode_workers=candidate.decode_workers,
+                fabric=fabric,
+            )
+            prefill_instances = candidate.prefill_workers
+            decode_instances = candidate.decode_workers
         try:
-            metrics = _run_scenario(resolved, scenario, prefix=request.prefix, timeout_seconds=timeout)
+            metrics = _run_scenario(
+                resolved,
+                scenario,
+                prefix=request.prefix,
+                timeout_seconds=timeout,
+                prefill_instances=prefill_instances,
+                decode_instances=decode_instances,
+            )
         except BlisExecutionError as exc:
-            # A failed/timed-out candidate is an unsuccessful point in the bounded
-            # search, not grounds to substitute AISimulate. Keep searching only
-            # within the remaining global budget.
-            evaluated.append(tp)
+            evaluated.append(candidate)
             execution_failures.append(exc)
             continue
-        evaluated.append(tp)
+        evaluated.append(candidate)
         completed = metrics.get("completed_requests")
-        if not isinstance(completed, (int, float)) or completed <= 0:
-            continue
-        if metrics.get("dropped_unservable", 0):
+        if not isinstance(completed, (int, float)) or completed <= 0 or metrics.get("dropped_unservable", 0):
             continue
         ttft = metrics.get("ttft_mean_ms")
         itl = metrics.get("itl_mean_ms")
@@ -418,26 +726,26 @@ def recommend(request: RecommendInput) -> BlisRecommendation:
                 continue
         elif ttft > request.ttft or itl > request.tpot:
             continue
+
         tokens_per_second = metrics.get("tokens_per_sec")
         reported_tpot = (
             (float(ttft) + float(itl) * (request.osl - 1)) / request.osl
             if request.inclusive_tpot and request.osl > 0
             else float(itl)
         )
-        feasible.append({
-            "total_gpus_needed": tp,
+        common_config: dict[str, Any] = {
+            "total_gpus_needed": candidate.total_gpus,
             "replicas_needed": 1,
-            "num_total_gpus": tp,
-            "tp": tp,
-            "pp": 1,
-            "dp": 1,
+            "num_total_gpus": candidate.total_gpus,
             "bs": concurrency,
             "ttft": float(ttft),
             "tpot": reported_tpot,
             "request_latency": float(e2e),
             "tokens_per_second": float(tokens_per_second) if isinstance(tokens_per_second, (int, float)) else None,
             "tokens_per_second_per_gpu": (
-                float(tokens_per_second) / tp if isinstance(tokens_per_second, (int, float)) and tp > 0 else None
+                float(tokens_per_second) / candidate.total_gpus
+                if isinstance(tokens_per_second, (int, float)) and candidate.total_gpus > 0
+                else None
             ),
             "tokens_per_second_per_user": (
                 float(tokens_per_second) / concurrency
@@ -448,28 +756,65 @@ def recommend(request: RecommendInput) -> BlisRecommendation:
             "model": request.model_path,
             "system": request.system,
             "backend": request.backend,
-            "backend_version": request.backend_version,
-            "mode": "agg",
+            "backend_version": resolved.engine_version,
+            "mode": candidate.mode,
             "simulator": "blis",
             "provenance": _provenance(resolved, request.model_path, request.system),
             "warnings": _model_warnings(resolved, model_config_provided=request.model_config_provided),
-        })
-        if len(feasible) >= request.top_n:
+        }
+        if candidate.mode == "agg":
+            common_config.update({"tp": candidate.tp, "pp": 1, "dp": 1})
+            if not include_disagg:
+                common_config["warnings"].append(
+                    "No network fabric was selected; BLIS P/D candidates were not searched."
+                )
+        else:
+            common_config.update({
+                "prefill_config": {
+                    "tp": candidate.prefill_tp,
+                    "pp": 1,
+                    "dp": 1,
+                    "num_workers": candidate.prefill_workers,
+                    "batch_size": concurrency,
+                    "backend_version": resolved.engine_version,
+                },
+                "decode_config": {
+                    "tp": candidate.decode_tp,
+                    "pp": 1,
+                    "dp": 1,
+                    "num_workers": candidate.decode_workers,
+                    "batch_size": concurrency,
+                    "backend_version": resolved.engine_version,
+                },
+            })
+        feasible.append(common_config)
+
+        at_end_of_gpu_group = index + 1 == len(candidates) or candidates[index + 1].total_gpus > candidate.total_gpus
+        if at_end_of_gpu_group and len(feasible) >= request.top_n:
             break
 
     if not feasible and candidates and len(execution_failures) == len(evaluated):
         raise execution_failures[-1]
-
+    feasible.sort(key=lambda config: (
+        config["total_gpus_needed"],
+        -(config["tokens_per_second"] or 0),
+        config["mode"],
+    ))
+    feasible = feasible[:request.top_n]
+    modes_searched = ["agg", "disagg"] if include_disagg else ["agg"]
     return BlisRecommendation(
         configs=feasible,
         provenance=_provenance(resolved, request.model_path, request.system),
         search_summary={
-            "strategy": "tensor_parallel_only",
-            "candidate_gpus": candidates,
-            "evaluated_gpus": evaluated,
+            "strategy": "aggregate_tp_and_pd_grid" if include_disagg else "tensor_parallel_only",
+            "modes_searched": modes_searched,
+            "candidate_gpus": sorted({candidate.total_gpus for candidate in candidates}),
+            "evaluated_gpus": sorted({candidate.total_gpus for candidate in evaluated}),
             "max_candidates": len(candidates),
-            "configured_max_gpus": request.max_candidate_gpus or resolved.gpus_per_node,
-            "hardware_max_gpus": resolved.gpus_per_node,
+            "candidate_configurations": len(candidates),
+            "evaluated_configurations": len(evaluated),
+            "configured_max_gpus": request.max_candidate_gpus or hardware_max,
+            "hardware_max_gpus": hardware_max,
             "effective_max_gpus": upper,
             "time_budget_seconds": total_budget_seconds,
             "budget_exhausted": timed_out,

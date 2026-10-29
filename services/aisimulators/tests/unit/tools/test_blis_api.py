@@ -84,6 +84,69 @@ def test_blis_predict_returns_selected_simulator_and_provenance_without_memory_f
     run_aisimulate.assert_not_called()
 
 
+def test_blis_predict_dispatches_disagg_with_fabric_and_returns_pool_configs():
+    prediction = SimpleNamespace(
+        **_prediction().__dict__,
+        prefill_config={"tp": 4, "pp": 1, "num_workers": 2, "batch_size": 8},
+        decode_config={"tp": 2, "pp": 1, "num_workers": 1, "batch_size": 8},
+    )
+    with (
+        patch("tools.api_service.app.run_blis_estimate", return_value=prediction) as run_blis,
+        patch("tools.api_service.app._run_aisimulate_prediction") as run_aisimulate,
+    ):
+        response = client.post("/predict?include=config,memory", json={
+            **ESTIMATE_BODY,
+            "simulator": "blis",
+            "mode": "disagg",
+            "fabric": "ib-400g",
+            "prefill_tp_size": 4,
+            "prefill_num_workers": 2,
+            "decode_tp_size": 2,
+            "decode_num_workers": 1,
+        })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["simulator"] == "blis"
+    assert body["mode"] == "disagg"
+    assert body["prefill_config"]["tp"] == 4
+    assert body["prefill_config"]["num_workers"] == 2
+    assert body["decode_config"]["tp"] == 2
+    assert body["memory_breakdown"] is None
+    assert run_blis.call_args.args[0].fabric == "ib-400g"
+    assert run_blis.call_args.args[0].mode == "disagg"
+    run_aisimulate.assert_not_called()
+
+
+def test_blis_disagg_requires_an_explicit_fabric():
+    response = client.post("/predict", json={
+        **ESTIMATE_BODY,
+        "simulator": "blis",
+        "mode": "disagg",
+    })
+
+    assert response.status_code == 422
+    assert "require an explicit fabric" in response.json()["detail"]
+
+
+def test_network_endpoint_lists_fabrics_from_the_pinned_manifest():
+    with patch(
+        "tools.api_service.app.load_support_manifest",
+        return_value=SimpleNamespace(networks=frozenset({"ib-400g", "roce-200g"})),
+    ):
+        response = client.get("/networks")
+
+    assert response.status_code == 200
+    assert response.json() == {"networks": ["ib-400g", "roce-200g"], "simulator": "blis"}
+
+
+def test_aisimulate_rejects_blis_fabric_selection():
+    response = client.post("/recommend", json={**RECOMMEND_BODY, "fabric": "ib-400g"})
+
+    assert response.status_code == 422
+    assert "AISimulate does not currently consume" in response.json()["detail"][0]["msg"]
+
+
 def test_blis_predict_unsupported_request_does_not_fall_back():
     with (
         patch(
@@ -171,6 +234,46 @@ def test_blis_recommend_uses_the_configured_candidate_limit():
         app_module._blis_recommend(request)
 
     assert run_blis.call_args.args[0].max_candidate_gpus == 8
+
+
+def test_blis_recommend_accepts_fabric_and_returns_chosen_pd_mode():
+    outcome = SimpleNamespace(
+        configs=[{
+            "total_gpus_needed": 2,
+            "replicas_needed": 1,
+            "num_total_gpus": 2,
+            "mode": "disagg",
+            "simulator": "blis",
+            "prefill_config": {"tp": 1, "pp": 1, "dp": 1, "num_workers": 1},
+            "decode_config": {"tp": 1, "pp": 1, "dp": 1, "num_workers": 1},
+        }],
+        search_summary={"strategy": "aggregate_tp_and_pd_grid"},
+    )
+    with patch("tools.api_service.app._blis_recommend", return_value=outcome) as recommend:
+        response = client.post("/recommend", json={
+            **RECOMMEND_BODY,
+            "simulator": "blis",
+            "fabric": "ib-400g",
+        })
+
+    assert response.status_code == 200
+    assert response.json()["chosen_mode"] == "disagg"
+    assert recommend.call_args.args[0].fabric == "ib-400g"
+
+
+def test_blis_recommend_defaults_roce_but_allows_explicit_aggregate_only():
+    defaulted = app_module.RecommendRequest.model_validate({
+        **RECOMMEND_BODY,
+        "simulator": "blis",
+    })
+    aggregate_only = app_module.RecommendRequest.model_validate({
+        **RECOMMEND_BODY,
+        "simulator": "blis",
+        "fabric": None,
+    })
+
+    assert defaulted.fabric == "roce-200g"
+    assert aggregate_only.fabric is None
 
 
 def test_blis_recommend_normalizes_fractional_concurrency_like_aisimulate():

@@ -56,7 +56,8 @@ GPU sizing formulas or call external service URLs directly from the browser.
 
 1. `app/predict/Performance.tsx` builds an explicit model, system, workload,
    backend, simulator, and parallelism request. The simulator comes from the
-   global Settings selection.
+   global Settings selection. BLIS P/D predictions also include the chosen
+   network fabric and per-pool settings.
 2. `lib/api/estimate-adapter.ts` posts it to `/api/predict?include=config,memory`.
 3. The Next.js route delegates to `lib/api/predict-proxy.ts`, which calls the
    AISimulators `/predict` endpoint server-side.
@@ -71,13 +72,15 @@ GPU sizing formulas or call external service URLs directly from the browser.
    and any memory data the selected simulator provides.
 3. Streaming clients request `text/event-stream`; AISimulate emits search-window
    progress while `incrementalRecommend` searches and refines GPU bounds. BLIS
-   performs one bounded TP-only search and returns its actual search summary.
+   performs one bounded aggregate TP search, plus a bounded P/D grid when a
+   fabric is selected, and returns the actual search summary.
 
 ### Catalog and pricing
 
 1. `useCatalog` calls `/api/catalog`.
-2. The catalog route fetches `/systems`, `/models`, and `/backends` from
-   AISimulators and combines them into one browser response.
+2. The catalog route fetches `/systems`, `/models`, `/backends`, and `/networks`
+   from AISimulators and combines them into one browser response. The network
+   list supplies fabrics for BLIS P/D predictions; AISimulate does not consume it.
 3. When costings are enabled, `useCostings` calls `/api/costings/models`,
    `/api/costings/systems`, and `/api/costings/health`.
 4. Those routes proxy the aicostings service; pricing data is not part of the

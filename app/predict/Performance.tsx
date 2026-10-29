@@ -131,7 +131,7 @@ export default function Performance() {
   console.log('Performance component mounting');
   const { hydrated, hfToken, defaultModel: settingsDefaultModel, inferenceBackend, backendVersion, simulator, costingsEnabled, preferredCloudProvider, pricingSource } = useSettings();
   const costings = useCostings(costingsEnabled, pricingSource);
-  const { gpuOptions: catalogGpus, modelOptions: catalogModels, modelSpecs, backendOptions, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
+  const { gpuOptions: catalogGpus, modelOptions: catalogModels, modelSpecs, backendOptions, networkOptions, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
 
   const [model, setModel] = React.useState('');
   const [gpu, setGpu] = React.useState(() => getAppConfig().defaultSystem);
@@ -257,6 +257,9 @@ export default function Performance() {
 
   // Disagg: prefill and decode pools with independent parallelism / batch.
   const [servingMode, setServingMode] = React.useState<'agg' | 'disagg'>('agg');
+  const [networkFabric, setNetworkFabric] = React.useState<string | null>(null);
+  const defaultNetworkFabric = networkOptions.includes('roce-200g') ? 'roce-200g' : '';
+  const selectedNetworkFabric = networkFabric ?? defaultNetworkFabric;
   const [prefillCfg, setPrefillCfg] = React.useState<PerfPhaseInput>({ tp: '1', pp: '1', workers: '1', batch: '1' });
   const [decodeCfg, setDecodeCfg] = React.useState<PerfPhaseInput>({ tp: '1', pp: '1', workers: '1', batch: '64' });
 
@@ -445,6 +448,7 @@ export default function Performance() {
           batch_size: testConcurrentUsers,
           tp_size: testTpSize,
           simulator,
+          ...(servingMode === 'disagg' && simulator === 'blis' && selectedNetworkFabric ? { fabric: selectedNetworkFabric } : {}),
           ...(effectiveContextLimit != null ? { max_seq_len: effectiveContextLimit } : {}),
           ...(prefillMaxSeqLen != null ? { prefill_max_seq_len: prefillMaxSeqLen } : {}),
           ...(decodeMaxSeqLen != null ? { decode_max_seq_len: decodeMaxSeqLen } : {}),
@@ -465,8 +469,7 @@ export default function Performance() {
                           testWeightPrecision === 'MXFP4' ? 'mxfp4' :
                           testWeightPrecision === 'NVFP4' ? 'nvfp4' : null,
           moe_quant_mode: isMoe ? testMoeQuantMode : undefined,
-          moe_ep_size: testMoeEpSize,
-          moe_tp_size: testMoeEtpSize,
+          ...(isMoe && { moe_ep_size: testMoeEpSize, moe_tp_size: testMoeEtpSize }),
           ...(servingMode === 'disagg' && {
             mode: 'disagg' as const,
             prefill: parsePerfPhase(prefillCfg),
@@ -737,6 +740,7 @@ export default function Performance() {
       system: gpu || '(select GPU)',
       backend: inferenceBackend,
       simulator,
+       ...(servingMode === 'disagg' && simulator === 'blis' && selectedNetworkFabric && { fabric: selectedNetworkFabric }),
       isl: testISL,
       osl: testOSL,
       ...(effectiveContextLimit != null && { max_seq_len: effectiveContextLimit }),
@@ -762,8 +766,7 @@ export default function Performance() {
         ? (hfConfig as Record<string, unknown> | null)
         : null,
       moe_quant_mode: isMoe ? testMoeQuantMode : undefined,
-      moe_ep_size: testMoeEpSize,
-      moe_tp_size: testMoeEtpSize,
+      ...(isMoe && { moe_ep_size: testMoeEpSize, moe_tp_size: testMoeEtpSize }),
       ...(servingMode === 'disagg' && {
         mode: 'disagg',
         prefill_tp_size: parsePerfPhase(prefillCfg).tp,
@@ -776,7 +779,7 @@ export default function Performance() {
         decode_batch_size: parsePerfPhase(decodeCfg).batch,
       })
     };
-  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, effectiveContextLimit, prefillMaxSeqLen, decodeMaxSeqLen, gpuMemoryUtilization, vllmOverride, vllmManualMaxNumSeqs, vllmManualChunkedPrefill, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize, simulator]);
+  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, effectiveContextLimit, prefillMaxSeqLen, decodeMaxSeqLen, gpuMemoryUtilization, vllmOverride, vllmManualMaxNumSeqs, vllmManualChunkedPrefill, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize, simulator, selectedNetworkFabric]);
 
   // Copy API request body to clipboard
   const handleCopyAPIRequest = async () => {
@@ -1308,7 +1311,7 @@ export default function Performance() {
           <Button
             variant="primary"
             onClick={() => { setTestResult(null); setTestError(null); setTestErrorCode(null); setCalcTrigger(t => t + 1); }}
-            isDisabled={isCalculating || !gpu || !model || catalogLoading || invalidISL || invalidOSL || invalidUsers || invalidTpSize || invalidPpSize || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen}
+            isDisabled={isCalculating || !gpu || !model || catalogLoading || invalidISL || invalidOSL || invalidUsers || invalidTpSize || invalidPpSize || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen || (simulator === 'blis' && servingMode === 'disagg' && !selectedNetworkFabric)}
           >
             {isCalculating ? 'Calculating...' : 'Calculate'}
           </Button>
@@ -1327,10 +1330,36 @@ export default function Performance() {
           )}
         </div>
         {servingMode === 'disagg' && (
-          <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-            <PerfPhaseFields title="Prefill pool" cfg={prefillCfg} onChange={setPrefillCfg} />
-            <PerfPhaseFields title="Decode pool" cfg={decodeCfg} onChange={setDecodeCfg} />
-          </div>
+          <>
+            {simulator === 'blis' && (
+              <div style={{ marginTop: 14, maxWidth: 360 }}>
+                <label className={styles.accFieldLabel} htmlFor="predict-network-fabric">Inter-node fabric</label>
+                <FormSelect
+                  id="predict-network-fabric"
+                  value={selectedNetworkFabric}
+                  aria-label="Inter-node fabric"
+                  isDisabled={(networkOptions ?? []).length === 0}
+                  onChange={(_, value) => { setNetworkFabric(value); setTestResult(null); }}
+                >
+                  <FormSelectOption value="" label="Select a fabric" isDisabled />
+                  {(networkOptions ?? []).map(network => (
+                    <FormSelectOption key={network} value={network} label={network} />
+                  ))}
+                </FormSelect>
+                <div style={{ fontSize: 13, color: '#3c3f42', marginTop: 4 }}>
+                  {networkOptions.length === 0
+                    ? 'No network fabrics were returned by the simulator catalog.'
+                    : selectedNetworkFabric === 'roce-200g' && networkFabric === null
+                      ? 'RoCE 200G is preselected; change it if your cluster uses another fabric.'
+                      : 'BLIS uses this fabric to price prefill-to-decode KV transfer.'}
+                </div>
+              </div>
+            )}
+            <div style={{ marginTop: 14, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+              <PerfPhaseFields title="Prefill pool" cfg={prefillCfg} onChange={setPrefillCfg} />
+              <PerfPhaseFields title="Decode pool" cfg={decodeCfg} onChange={setDecodeCfg} />
+            </div>
+          </>
         )}
       </div>
 

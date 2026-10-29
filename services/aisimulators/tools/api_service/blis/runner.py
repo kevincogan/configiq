@@ -30,6 +30,8 @@ class RunRequest:
     concurrency: int
     num_requests: int
     prefix_tokens: int = 0
+    prefill_instances: int = 0
+    decode_instances: int = 0
 
 
 def build_run_command(runtime: BlisRuntime, request: RunRequest) -> list[str]:
@@ -56,24 +58,45 @@ def build_run_command(runtime: BlisRuntime, request: RunRequest) -> list[str]:
     ]
     if request.prefix_tokens > 0:
         command.extend(["--prefix-tokens", str(request.prefix_tokens)])
+    if request.prefill_instances or request.decode_instances:
+        if request.prefill_instances < 1 or request.decode_instances < 1:
+            raise ValueError("P/D runs require at least one prefill and one decode instance")
+        command.extend([
+            "--num-instances", str(request.prefill_instances + request.decode_instances),
+            "--prefill-instances", str(request.prefill_instances),
+            "--decode-instances", str(request.decode_instances),
+        ])
     return command
 
 
 def parse_metrics(stdout: str) -> dict[str, Any]:
-    marker_index = stdout.find(METRICS_MARKER)
-    if marker_index < 0:
+    reports: list[dict[str, Any]] = []
+    search_from = 0
+    while True:
+        marker_index = stdout.find(METRICS_MARKER, search_from)
+        if marker_index < 0:
+            break
+        payload_start = marker_index + len(METRICS_MARKER)
+        payload = stdout[payload_start:].strip()
+        json_start = payload.find("{")
+        if json_start < 0:
+            raise BlisExecutionError("BLIS metrics section does not contain a JSON object")
+        try:
+            metrics, json_end = json.JSONDecoder().raw_decode(payload, json_start)
+        except json.JSONDecodeError as exc:
+            raise BlisExecutionError(f"BLIS metrics JSON is invalid: {exc.msg}") from exc
+        if not isinstance(metrics, dict):
+            raise BlisExecutionError("BLIS metrics payload must be a JSON object")
+        reports.append(metrics)
+        search_from = payload_start + json_end
+
+    if not reports:
         raise BlisExecutionError(f"BLIS output is missing {METRICS_MARKER!r}")
-    payload = stdout[marker_index + len(METRICS_MARKER):].strip()
-    json_start = payload.find("{")
-    if json_start < 0:
-        raise BlisExecutionError("BLIS metrics section does not contain a JSON object")
-    try:
-        metrics, _ = json.JSONDecoder().raw_decode(payload, json_start)
-    except json.JSONDecodeError as exc:
-        raise BlisExecutionError(f"BLIS metrics JSON is invalid: {exc.msg}") from exc
-    if not isinstance(metrics, dict):
-        raise BlisExecutionError("BLIS metrics payload must be a JSON object")
-    return metrics
+    # Cluster-wide metrics follow per-instance reports in multi-instance (P/D)
+    # runs. Prefer that aggregate so callers do not mistake the prefill-only
+    # report for end-to-end latency and throughput.
+    cluster_reports = [report for report in reports if report.get("instance_id") == "cluster"]
+    return cluster_reports[-1] if cluster_reports else reports[0]
 
 
 def run_blis(
