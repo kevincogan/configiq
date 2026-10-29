@@ -1123,6 +1123,20 @@ class TestEstimate:
 
         assert resp.status_code == 200
         assert resp.json()["ttft"] == pytest.approx(471.378)
+        assert resp.json()["provenance"]["simulator"] == "aisimulate"
+        assert resp.json()["provenance"]["requested_model"] == VALID_ESTIMATE_BODY["model_path"]
+
+    @patch("tools.api_service.app._blis_estimate")
+    def test_predict_provenance_fallback_matches_requested_simulator(self, mock_estimate):
+        mock_estimate.return_value = make_mock_estimate_result()
+        body = {**VALID_ESTIMATE_BODY, "simulator": "blis"}
+
+        resp = client.post("/predict", json=body)
+
+        assert resp.status_code == 200
+        assert resp.json()["simulator"] == "blis"
+        assert resp.json()["provenance"]["simulator"] == "blis"
+        assert resp.json()["provenance"]["requested_model"] == body["model_path"]
 
     @patch("tools.api_service.app._run_aisimulate_prediction")
     def test_predict_derives_per_gpu_throughput_from_requested_topology(self, mock_estimate):
@@ -1220,6 +1234,7 @@ class TestEstimate:
             "tensor_parallel_size": 2,
             "max_model_len": 5000,
             "max_num_seqs": 64,
+            "max_num_batched_tokens": None,
             "gpu_memory_utilization": 0.97,
             "enable_chunked_prefill": True,
             "enable_prefix_caching": True,

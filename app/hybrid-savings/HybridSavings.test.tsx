@@ -46,9 +46,9 @@ beforeEach(async () => {
   })
   vi.mocked(useSettings).mockReturnValue({
     hydrated: true, defaultModel: 'Qwen/Qwen3-8B', testedModels: [],
-    hfToken: '', backendVersion: '', inferenceBackend: 'vllm',
+    hfToken: '', backendVersion: '', inferenceBackend: 'vllm', simulator: 'aisimulate',
     costingsEnabled: true, preferredCloudProvider: null, pricingSource: 'merged',
-    setDefaultModel: vi.fn(), setHfToken: vi.fn(), setInferenceBackend: vi.fn(),
+    setDefaultModel: vi.fn(), setHfToken: vi.fn(), setInferenceBackend: vi.fn(), setSimulator: vi.fn(),
     setBackendVersion: vi.fn(), setCostingsEnabled: vi.fn(), setPreferredCloudProvider: vi.fn(),
     setPricingSource: vi.fn(),
   })

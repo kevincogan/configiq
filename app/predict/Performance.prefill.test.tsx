@@ -126,6 +126,7 @@ const makeSettings = (costingsEnabled: boolean): ReturnType<typeof useSettings> 
   testedModels: [],
   hfToken: '',
   inferenceBackend: 'vllm',
+  simulator: 'aisimulate',
   backendVersion: 'latest',
   costingsEnabled,
   preferredCloudProvider: 'aws.us-east-1',
@@ -133,12 +134,15 @@ const makeSettings = (costingsEnabled: boolean): ReturnType<typeof useSettings> 
   setDefaultModel: vi.fn(),
   setHfToken: vi.fn(),
   setInferenceBackend: vi.fn(),
+  setSimulator: vi.fn(),
   setBackendVersion: vi.fn(),
   setCostingsEnabled: vi.fn(),
   setPreferredCloudProvider: vi.fn(),
   setPricingSource: vi.fn(),
 });
 const estimateResult: InferenceConfigResult = {
+  simulator: 'aisimulate',
+  memory_available: true,
   memory_analysis: {
     weight_gb: 14,
     weight_gb_per_gpu: 14,

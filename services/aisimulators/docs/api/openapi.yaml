@@ -32,11 +32,16 @@ paths:
       summary: Find optimal GPU configuration for a workload
       description: |
         Given a model, GPU system, backend, workload shape, and performance
-        targets (SLA), searches across parallelism configurations (TP/PP/DP/EP)
-        and serving modes (aggregated and disaggregated) to find the deployment
-        with the fewest GPUs that meets the constraints.
+        targets (SLA), finds a deployment that meets the constraints. With
+        `simulator=aisimulate`, searches parallelism configurations (TP/PP/DP/EP)
+        and serving modes (aggregated and disaggregated). With `simulator=blis`,
+        searches tensor-parallel sizes only for concurrency workloads on a
+        single node; unsupported requests return an error instead of falling
+        back to AISimulate.
 
-        Wraps `cli_recommend()` from the aisimulate SDK.
+        The AISimulate path wraps `cli_recommend()` from the aisimulate SDK.
+        The BLIS path generates a temporary Scenario and Deployment and runs the
+        image-pinned BLIS CLI.
 
         Exactly one of `target_request_rate` or `target_concurrency` must be
         provided.
@@ -93,7 +98,10 @@ paths:
         Use this when you know your deployment configuration and want to predict
         its performance. Use `/recommend` when you want to find the optimal config.
 
-        Wraps `cli_estimate()` from the aisimulate SDK.
+        With `simulator=aisimulate`, wraps `cli_estimate()` from the aisimulate
+        SDK. With `simulator=blis`, runs a generated aggregate vLLM scenario;
+        unsupported settings return an error instead of falling back to
+        AISimulate. BLIS results do not include a KV-cache memory breakdown.
 
         Use the `include` query parameter to enrich the result with optional
         detail sections:
@@ -256,6 +264,35 @@ paths:
 components:
   schemas:
 
+    SimulatorProvenance:
+      type: object
+      properties:
+        simulator:
+          type: string
+          enum: [aisimulate, blis]
+        requested_model:
+          type: string
+          nullable: true
+        resolved_model:
+          type: string
+          nullable: true
+        model_source:
+          type: string
+          nullable: true
+        system:
+          type: string
+          nullable: true
+        hardware:
+          type: string
+          nullable: true
+        model_config_relation:
+          type: string
+          nullable: true
+          description: Relationship between the requested model configuration and the selected simulator's model data.
+        engine_version:
+          type: string
+          nullable: true
+
     # ── Recommend ──────────────────────────────────────────────────────────
 
     RecommendRequest:
@@ -270,6 +307,11 @@ components:
           type: string
           description: GPU system identifier.
           example: h200_sxm
+        simulator:
+          type: string
+          enum: [aisimulate, blis]
+          default: aisimulate
+          description: Simulator to use. BLIS requests never fall back to AISimulate.
         backend:
           type: string
           description: Inference backend.
@@ -326,6 +368,12 @@ components:
           default: 5
           minimum: 1
           maximum: 20
+        search_budget_seconds:
+          type: integer
+          description: BLIS total search budget in seconds; capped at 60 and reduced by the web gateway when needed.
+          default: 60
+          minimum: 1
+          maximum: 60
         inclusive_tpot:
           type: boolean
           description: |
@@ -343,6 +391,9 @@ components:
       type: object
       required: [configs, chosen_mode]
       properties:
+        simulator:
+          type: string
+          enum: [aisimulate, blis]
         configs:
           type: array
           description: Top configurations ranked by fewest GPUs, then throughput.
@@ -352,10 +403,31 @@ components:
           type: string
           description: Serving mode chosen (agg or disagg).
           example: agg
+        search_summary:
+          type: object
+          nullable: true
+          description: BLIS TP-only candidate list, actual evaluated points, and applied bounds.
+          properties:
+            strategy: { type: string, example: tensor_parallel_only }
+            candidate_gpus: { type: array, items: { type: integer } }
+            evaluated_gpus: { type: array, items: { type: integer } }
+            configured_max_gpus: { type: integer }
+            hardware_max_gpus: { type: integer }
+            effective_max_gpus: { type: integer }
+            time_budget_seconds: { type: number }
+            budget_exhausted: { type: boolean }
 
     RecommendConfig:
       type: object
       properties:
+        simulator:
+          type: string
+          enum: [aisimulate, blis]
+        provenance:
+          $ref: '#/components/schemas/SimulatorProvenance'
+        warnings:
+          type: array
+          items: { type: string }
         # GPU sizing
         total_gpus_needed:
           type: integer
@@ -556,11 +628,17 @@ components:
         max_num_seqs:
           type: integer
           description: Maximum concurrent sequences.
+        max_num_batched_tokens:
+          type: integer
+          nullable: true
+          description: Maximum tokens in a scheduled batch, when specified by the simulator.
         gpu_memory_utilization:
           type: number
           description: Fraction of GPU memory to use (0.0-1.0).
         enable_chunked_prefill:
           type: boolean
+          nullable: true
+          description: Null when the simulator's scenario does not state this backend setting.
         enable_prefix_caching:
           type: boolean
         quantization:
@@ -581,6 +659,11 @@ components:
           type: string
           description: GPU system identifier.
           example: h200_sxm
+        simulator:
+          type: string
+          enum: [aisimulate, blis]
+          default: aisimulate
+          description: Simulator to use. BLIS requests never fall back to AISimulate.
         backend:
           type: string
           description: Inference backend.
@@ -663,6 +746,18 @@ components:
       required: [ttft, tpot]
       description: Single-point performance estimate for a given parallelism configuration.
       properties:
+        simulator:
+          type: string
+          enum: [aisimulate, blis]
+        provenance:
+          $ref: '#/components/schemas/SimulatorProvenance'
+        memory_unavailable_reason:
+          type: string
+          nullable: true
+          description: Why an optional memory breakdown was not provided by the selected simulator.
+        warnings:
+          type: array
+          items: { type: string }
         ttft:
           type: number
           description: Predicted TTFT (ms).
@@ -834,6 +929,10 @@ components:
       type: object
       required: [total_gpu_capacity_bytes, total_kv_size_bytes, kv_size_per_token_bytes, total_kv_size_tokens, source, memory_breakdown]
       properties:
+        simulator:
+          type: string
+          enum: [aisimulate]
+          description: Memory estimation is provided by AISimulate.
         total_gpu_capacity_bytes:
           type: integer
           description: Total GPU memory capacity (bytes).

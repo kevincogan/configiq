@@ -8,6 +8,18 @@ interface RecommendWarning {
   message: string
 }
 
+export interface RecommendSearchSummary {
+  strategy: string
+  candidate_gpus: number[]
+  evaluated_gpus: number[]
+  max_candidates: number
+  configured_max_gpus: number
+  hardware_max_gpus: number
+  effective_max_gpus: number
+  time_budget_seconds: number
+  budget_exhausted: boolean
+}
+
 export type ServingMode = 'agg' | 'disagg'
 
 /**
@@ -32,6 +44,8 @@ export interface PhaseConfig {
 export interface RecommendResult {
   requestId: string
   status: 'completed'
+  simulator: 'aisimulate' | 'blis'
+  searchSummary?: RecommendSearchSummary
   /** Serving mode the recommender chose. Disagg splits prefill/decode pools. */
   mode: ServingMode
   recommendation: {
@@ -77,6 +91,7 @@ export interface RecommendResult {
       overheadGb: number
     } | null
   }
+  memoryAvailable: boolean
   metadata: {
     modelPath: string
     system: string
@@ -205,6 +220,18 @@ export async function callRecommend(
     top_n: request.top_n ?? 5,
   }
 
+  if (request.simulator === 'blis') {
+    const blisSearchBudgetSeconds = Math.min(60, requestTimeoutSeconds - 5)
+    if (blisSearchBudgetSeconds < 1) {
+      return makeError(
+        requestId,
+        'AISIM_TIMEOUT',
+        'The configured gateway timeout is too short to run a bounded BLIS recommendation.',
+      )
+    }
+    externalPayload.search_budget_seconds = blisSearchBudgetSeconds
+  }
+
   if (request.max_seq_len != null) externalPayload.max_seq_len = request.max_seq_len
   if (request.prefill_max_seq_len != null) externalPayload.prefill_max_seq_len = request.prefill_max_seq_len
   if (request.decode_max_seq_len != null) externalPayload.decode_max_seq_len = request.decode_max_seq_len
@@ -215,7 +242,7 @@ export async function callRecommend(
   if (request.request_latency != null) externalPayload.request_latency = request.request_latency
   if (request.prefix != null) externalPayload.prefix = request.prefix
   if (request.model_config != null) externalPayload.model_config = request.model_config
-  if (request.estimator_backend != null) externalPayload.estimator_backend = request.estimator_backend
+  if (request.simulator != null) externalPayload.simulator = request.simulator
   if (options.window?.minGpus != null) externalPayload.min_candidate_gpus = options.window.minGpus
   if (options.window?.maxGpus != null) externalPayload.max_candidate_gpus = options.window.maxGpus
 
@@ -260,9 +287,15 @@ export async function callRecommend(
     // the service now maps this condition to 422 as well.
     const noViableWindow = detail.includes('NoViableParallelConfig') ||
       detail.includes('no deployment_mode has a viable parallel config')
-    const code = response.status === 422 || noViableWindow
-      ? 'AISIM_NO_CONFIGURATION'
-      : 'AISIM_UNAVAILABLE'
+    const code = response.status === 504
+      ? 'AISIM_TIMEOUT'
+      : noViableWindow
+        ? 'AISIM_NO_CONFIGURATION'
+      : response.status >= 500
+        ? 'AISIM_UNAVAILABLE'
+        : response.status === 422
+          ? 'AISIM_NO_CONFIGURATION'
+          : 'AISIM_UNAVAILABLE'
     return makeError(requestId, code, detail)
   }
 
@@ -273,6 +306,25 @@ export async function callRecommend(
     return makeError(requestId, 'AISIM_INVALID_RESPONSE', 'AISimulators API returned non-JSON response')
   }
 
+  const responseSimulator = rawData.simulator === 'aisimulate' || rawData.simulator === 'blis'
+    ? rawData.simulator
+    : null
+  if (rawData.simulator != null && responseSimulator == null) {
+    return makeError(
+      requestId,
+      'AISIM_INVALID_RESPONSE',
+      'The API returned an unknown simulator identifier.',
+    )
+  }
+  const actualSimulator = responseSimulator ?? (request.simulator === 'aisimulate' ? 'aisimulate' : null)
+  if (actualSimulator !== request.simulator) {
+    return makeError(
+      requestId,
+      'SIMULATOR_MISMATCH',
+      `Requested ${request.simulator}, but the API confirmed ${actualSimulator ?? 'no simulator'}. No fallback was accepted.`,
+    )
+  }
+
   const configs = rawData.configs as Array<Record<string, unknown>> | undefined
   if (!configs || configs.length === 0) {
     return makeError(requestId, 'AISIM_NO_CONFIGURATION', 'No valid GPU configuration found for this model and hardware combination.')
@@ -281,6 +333,24 @@ export async function callRecommend(
   const best = configs[0]
   const chosenMode = typeof rawData.chosen_mode === 'string' ? rawData.chosen_mode : 'agg'
   const mode: ServingMode = chosenMode.startsWith('disagg') ? 'disagg' : 'agg'
+  const simulator = actualSimulator
+  const searchSummaryRaw = rawData.search_summary && typeof rawData.search_summary === 'object'
+    ? rawData.search_summary as Record<string, unknown>
+    : undefined
+  const searchSummary: RecommendSearchSummary | undefined = searchSummaryRaw &&
+    Array.isArray(searchSummaryRaw.candidate_gpus) && Array.isArray(searchSummaryRaw.evaluated_gpus)
+    ? {
+        strategy: typeof searchSummaryRaw.strategy === 'string' ? searchSummaryRaw.strategy : 'unknown',
+        candidate_gpus: searchSummaryRaw.candidate_gpus.filter((gpu): gpu is number => typeof gpu === 'number'),
+        evaluated_gpus: searchSummaryRaw.evaluated_gpus.filter((gpu): gpu is number => typeof gpu === 'number'),
+        max_candidates: typeof searchSummaryRaw.max_candidates === 'number' ? searchSummaryRaw.max_candidates : 0,
+        configured_max_gpus: typeof searchSummaryRaw.configured_max_gpus === 'number' ? searchSummaryRaw.configured_max_gpus : 0,
+        hardware_max_gpus: typeof searchSummaryRaw.hardware_max_gpus === 'number' ? searchSummaryRaw.hardware_max_gpus : 0,
+        effective_max_gpus: typeof searchSummaryRaw.effective_max_gpus === 'number' ? searchSummaryRaw.effective_max_gpus : 0,
+        time_budget_seconds: typeof searchSummaryRaw.time_budget_seconds === 'number' ? searchSummaryRaw.time_budget_seconds : 0,
+        budget_exhausted: searchSummaryRaw.budget_exhausted === true,
+      }
+    : undefined
 
   const rawTotalGpusNeeded = (best.total_gpus_needed as number) ?? 0
   const rawReplicasNeeded = (best.replicas_needed as number) ?? 0
@@ -367,6 +437,7 @@ export async function callRecommend(
   const memoryGb = typeof best.memory === 'number' && Number.isFinite(best.memory)
     ? best.memory
     : memoryFromBreakdown
+  const memoryAvailable = typeof best.memory === 'number' || memoryBreakdown != null
 
   const requiredValues = [
     totalGpusNeeded,
@@ -398,6 +469,8 @@ export async function callRecommend(
   return {
     requestId,
     status: 'completed',
+    simulator,
+    searchSummary,
     mode,
     recommendation: {
       gpusNeeded: totalGpusNeeded,
@@ -429,6 +502,7 @@ export async function callRecommend(
       unit: 'GB',
       breakdown: memoryBreakdownGb,
     },
+    memoryAvailable,
     metadata: {
       modelPath: request.model_path,
       system: request.system,
@@ -437,7 +511,11 @@ export async function callRecommend(
       targetTtftMs: request.ttft,
       durationMs,
     },
-    warnings: [],
+    warnings: Array.isArray(best.warnings)
+      ? best.warnings
+          .filter((warning): warning is string => typeof warning === 'string')
+          .map(message => ({ code: 'SIMULATOR_WARNING', message }))
+      : [],
   }
 }
 
@@ -450,6 +528,20 @@ export async function* incrementalRecommend(
   request: RecommendRequest,
   signal?: AbortSignal,
 ): AsyncGenerator<RecommendProgressEvent> {
+  if (request.simulator === 'blis') {
+    if (signal?.aborted) throw new DOMException('Recommendation search aborted', 'AbortError')
+    const totalTimeoutSeconds = gatewayTimeoutSeconds()
+    // BLIS owns a bounded TP-only search in the service. It is one request,
+    // not a sequence of AISimulate GPU windows; avoid publishing a guessed
+    // max-GPU range that would misstate the search the service actually ran.
+    const response = await callRecommend(request, {
+      timeoutSeconds: Math.max(1, totalTimeoutSeconds - 1),
+      signal,
+    })
+    yield { type: 'completed', response }
+    return
+  }
+
   const maxGpus = configuredMaxCandidateGpus()
   const totalTimeoutSeconds = gatewayTimeoutSeconds()
   const deadline = performance.now() + Math.max(1, totalTimeoutSeconds - 1) * 1000

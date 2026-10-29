@@ -17,7 +17,7 @@ const VALID_REQUEST = {
   prefix: 0,
   database_mode: 'HYBRID' as const,
   top_n: 5,
-  estimator_backend: 'aisimulate' as const,
+  simulator: 'aisimulate' as const,
 }
 
 const EXTERNAL_RESPONSE = {
@@ -38,6 +38,39 @@ const EXTERNAL_RESPONSE = {
     dp: 1,
   }],
   chosen_mode: 'agg',
+}
+
+const BLIS_EXTERNAL_RESPONSE = {
+  ...EXTERNAL_RESPONSE,
+  simulator: 'blis',
+  search_summary: {
+    strategy: 'tensor_parallel_only',
+    candidate_gpus: [1, 2, 4],
+    evaluated_gpus: [1, 2],
+    max_candidates: 3,
+    configured_max_gpus: 16,
+    hardware_max_gpus: 8,
+    effective_max_gpus: 8,
+    time_budget_seconds: 60,
+    budget_exhausted: false,
+  },
+  configs: [{
+    ...EXTERNAL_RESPONSE.configs[0],
+    simulator: 'blis',
+    provenance: {
+      simulator: 'blis',
+      requested_model: 'meta-llama/Llama-3.1-70B-Instruct',
+      resolved_model: 'llama-3.1-70b-instruct',
+      model_source: 'upstream',
+      system: 'h200_sxm',
+      hardware: 'h200',
+      model_config_relation: 'different_quantization',
+      engine_version: '0.31.0',
+    },
+    warnings: ['The selected simulator uses a model configuration marked different_quantization.'],
+    memory: null,
+    memory_breakdown: null,
+  }],
 }
 
 function mockFetchOk(data: unknown) {
@@ -89,20 +122,20 @@ describe('RecommendRequestSchema', () => {
     expect(result.success).toBe(true)
   })
 
-  it('accepts estimator_backend', () => {
+  it('accepts simulator', () => {
     const result = RecommendRequestSchema.safeParse({
       ...VALID_REQUEST,
-      estimator_backend: 'blis',
+      simulator: 'blis',
     })
     expect(result.success).toBe(true)
-    if (result.success) expect(result.data.estimator_backend).toBe('blis')
+    if (result.success) expect(result.data.simulator).toBe('blis')
   })
 
-  it('defaults estimator_backend to aisimulate', () => {
-    const { estimator_backend: _omit, ...rest } = VALID_REQUEST
+  it('defaults simulator to aisimulate', () => {
+    const { simulator: _omit, ...rest } = VALID_REQUEST
     const result = RecommendRequestSchema.safeParse(rest)
     expect(result.success).toBe(true)
-    if (result.success) expect(result.data.estimator_backend).toBe('aisimulate')
+    if (result.success) expect(result.data.simulator).toBe('aisimulate')
   })
 
   it('accepts target_request_rate instead of target_concurrency', () => {
@@ -375,14 +408,49 @@ describe('callRecommend', () => {
     expect(sentBody.model_config).toEqual(model_config)
   })
 
-  it('forwards estimator_backend to the upstream request', async () => {
+  it('forwards simulator to the upstream request', async () => {
     const mockFetch = mockFetchOk(EXTERNAL_RESPONSE)
     vi.stubGlobal('fetch', mockFetch)
 
-    await callRecommend({ ...VALID_REQUEST, estimator_backend: 'blis' })
+    await callRecommend({ ...VALID_REQUEST, simulator: 'blis' }, { timeoutSeconds: 45 })
 
     const sentBody = JSON.parse(mockFetch.mock.calls[0][1].body)
-    expect(sentBody.estimator_backend).toBe('blis')
+    expect(sentBody.simulator).toBe('blis')
+    expect(sentBody.search_budget_seconds).toBe(40)
+  })
+
+  it('rejects a BLIS request when the API does not confirm BLIS provenance', async () => {
+    vi.stubGlobal('fetch', mockFetchOk(EXTERNAL_RESPONSE))
+
+    const result = await callRecommend({ ...VALID_REQUEST, simulator: 'blis' })
+
+    expect(result.status).toBe('failed')
+    if (result.status === 'failed') expect(result.error.code).toBe('SIMULATOR_MISMATCH')
+  })
+
+  it('returns BLIS provenance, memory availability, and actual search summary', async () => {
+    vi.stubGlobal('fetch', mockFetchOk(BLIS_EXTERNAL_RESPONSE))
+
+    const result = await callRecommend({ ...VALID_REQUEST, simulator: 'blis' })
+
+    expect(result.status).toBe('completed')
+    if (result.status === 'completed') {
+      expect(result.simulator).toBe('blis')
+      expect(result.memoryAvailable).toBe(false)
+      expect(result.warnings[0]?.message).toContain('different_quantization')
+      expect(result.searchSummary?.evaluated_gpus).toEqual([1, 2])
+    }
+  })
+
+  it('does not fabricate AISimulate GPU windows for BLIS', async () => {
+    vi.stubGlobal('fetch', mockFetchOk(BLIS_EXTERNAL_RESPONSE))
+    const events: string[] = []
+
+    for await (const event of incrementalRecommend({ ...VALID_REQUEST, simulator: 'blis' })) {
+      events.push(event.type)
+    }
+
+    expect(events).toEqual(['completed'])
   })
 
   it('forwards context window limits to the upstream request', async () => {

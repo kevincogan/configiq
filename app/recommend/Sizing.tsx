@@ -28,6 +28,7 @@ import { ModelInput } from '@/components/ui/ModelInput';
 import { ComboBox, type ComboBoxItem } from '@/components/ModelComboBox/ModelComboBox';
 import { buildModelItems, needsHfConfig } from '@/lib/model-options';
 import { GpuSystemInput } from '@/components/ui/GpuSystemInput';
+import { SimulatorBadge } from '@/components/ui/SimulatorBadge'
 
 function modelSuggestions(): string {
   const names = getAppConfig().suggestedModelNames;
@@ -163,6 +164,7 @@ function friendlyErrorTitle(code: string | null): string {
     case 'AISIM_UNAVAILABLE': return 'Sizing service unavailable';
     case 'AISIM_NOT_CONFIGURED': return 'Service not configured';
     case 'AISIM_INVALID_RESPONSE': return 'Unexpected response';
+    case 'SIMULATOR_MISMATCH': return 'Simulator mismatch';
     case 'INVALID_REQUEST': return 'Invalid input';
     case 'NETWORK_ERROR': return 'Connection error';
     default: return 'Something went wrong';
@@ -174,7 +176,9 @@ function friendlyErrorMessage(code: string | null, raw: string): string {
     case 'AISIM_TIMEOUT':
       return 'The AISimulators service took too long to respond. This can happen with complex configurations.';
     case 'AISIM_NO_CONFIGURATION':
-      return 'No valid GPU configuration found for this model and hardware combination.';
+      return raw || 'No valid GPU configuration found for this model and hardware combination.';
+    case 'SIMULATOR_MISMATCH':
+      return raw;
     case 'AISIM_UNAVAILABLE':
       return 'The AISimulators service is temporarily unreachable. This is usually a transient issue.';
     case 'AISIM_NOT_CONFIGURED':
@@ -195,7 +199,9 @@ function friendlyErrorHint(code: string | null): string {
     case 'AISIM_TIMEOUT':
       return 'Try again, or try a smaller model or simpler configuration.';
     case 'AISIM_NO_CONFIGURATION':
-      return 'Try a different GPU system, or reduce the input token length (ISL).';
+      return 'Try a different GPU system or adjust the requested configuration.';
+    case 'SIMULATOR_MISMATCH':
+      return 'The server did not confirm the requested simulator. The application will not substitute another simulator.';
     case 'AISIM_UNAVAILABLE':
       return 'Wait a moment and try again.';
     case 'NETWORK_ERROR':
@@ -210,7 +216,7 @@ function friendlyErrorHint(code: string | null): string {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function Sizing() {
-  const { hydrated, hfToken, defaultModel: settingsDefaultModel, inferenceBackend, backendVersion, costingsEnabled, pricingSource, preferredCloudProvider } = useSettings();
+  const { hydrated, hfToken, defaultModel: settingsDefaultModel, inferenceBackend, backendVersion, simulator, costingsEnabled, pricingSource, preferredCloudProvider } = useSettings();
   const costings = useCostings(costingsEnabled, pricingSource);
   const { modelOptions: catalogModels, gpuOptions: catalogGpus, modelSpecs, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
   const MODEL_OPTIONS = catalogModels;
@@ -243,9 +249,6 @@ export default function Sizing() {
 
   // Model status + HF config
   const [modelStatus, setModelStatus] = React.useState<'idle' | 'supported' | 'catalog' | 'fetching' | 'fetched' | 'error'>('idle');
-
-  // Estimator backend toggle
-  const [estimatorBackend, setEstimatorBackend] = React.useState<'aisimulate' | 'blis'>('aisimulate');
 
   // GPU sizer (persistent across navigation)
   const { isLoading, result, error, errorCode, elapsed, debugRequest, debugResponse, debugStatus, debugDuration, progressHistory, startSizing } = useRecommend();
@@ -406,7 +409,7 @@ export default function Sizing() {
       ...(backendVersion ? { backend_version: backendVersion } : {}),
       // Send the HF config for models AISimulators can't resolve from its catalog.
       ...(needsHfConfig(model, MODEL_OPTIONS) && hfConfig ? { model_config: hfConfig } : {}),
-      estimator_backend: estimatorBackend,
+      simulator,
     });
   };
 
@@ -458,16 +461,6 @@ export default function Sizing() {
           </div>
 
           <GpuSystemInput id="adv-gpu" value={gpuSystem} onChange={setGpuSystem} gpuOptions={catalogGpus} />
-        </div>
-
-        {/* Estimator toggle */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
-          <span style={{ fontSize: '12px', fontWeight: 600, fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#3c3f42', whiteSpace: 'nowrap' }}>Estimator:</span>
-          <Button variant={estimatorBackend === 'aisimulate' ? 'secondary' : 'tertiary'} size="sm" onClick={() => setEstimatorBackend('aisimulate')}>AISimulate</Button>
-          <Button variant={estimatorBackend === 'blis' ? 'secondary' : 'tertiary'} size="sm" onClick={() => setEstimatorBackend('blis')}>BLIS</Button>
-          {estimatorBackend === 'blis' && (
-            <span style={{ fontSize: '12px', color: '#3c3f42' }}>Discrete-event simulation. Searches TP 1–64 for the smallest feasible config.</span>
-          )}
         </div>
 
         {/* Calculate button */}
@@ -671,6 +664,20 @@ export default function Sizing() {
       {/* ─── Result tiles ─── */}
       {result && (
         <>
+          <div className={styles.card} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '12px 16px' }}>
+            <SimulatorBadge simulator={result.simulator} />
+            <span style={{ fontSize: 13, color: '#3c3f42' }}>Sizing recommendation</span>
+            {result.searchSummary && (
+              <span style={{ fontSize: 13, color: '#3c3f42' }}>
+                Search: {result.searchSummary.strategy.replaceAll('_', ' ')} · tested {result.searchSummary.evaluated_gpus.join(', ') || 'none'} GPUs · ceiling {result.searchSummary.effective_max_gpus} (configured {result.searchSummary.configured_max_gpus}, hardware {result.searchSummary.hardware_max_gpus}) · {result.searchSummary.time_budget_seconds}s{result.searchSummary.budget_exhausted ? ' budget reached' : ''}.
+              </span>
+            )}
+            {!result.memoryAvailable && (
+              <span style={{ fontSize: 13, color: '#3c3f42' }}>
+                This simulator does not provide memory estimates; the memory tile is hidden.
+              </span>
+            )}
+          </div>
           <div className={styles.tilesGrid}>
             {/* GPUs Required */}
             <FlipTile
@@ -796,8 +803,8 @@ export default function Sizing() {
               }
             />
 
-            {/* Peak memory per GPU */}
-            <FlipTile
+            {/* Peak memory per GPU (only when supplied by the selected simulator) */}
+            {result.memoryAvailable && <FlipTile
               front={
                 <>
                   <span className={styles.tileLabel}><MemoryIcon /> Peak mem / GPU</span>
@@ -843,7 +850,7 @@ export default function Sizing() {
                   </div>
                 </>
               }
-            />
+            />}
 
             {/* Est. monthly cost — only when costings is enabled and a rate is available */}
             {costingsEnabled && monthlyCost != null && pricePerHour != null && (

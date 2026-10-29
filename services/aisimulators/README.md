@@ -85,6 +85,33 @@ while AISimulate's `zai-org/GLM-5` is the unquantized base; the manifest marks t
 shared entry `different_quantization` and records the FP8 AISimulate model
 separately as `glm-5-fp8` with `equivalent_catalog_name: glm-5`.
 
+## Simulator API behavior
+
+`POST /predict` and `POST /recommend` accept `simulator: "aisimulate" | "blis"`;
+the default remains `aisimulate`. A BLIS request is gated by `support.json` and
+uses the manifest's catalog model and hardware identities. The service generates
+a temporary Scenario + Deployment for the requested configuration and passes it
+to `blis run` with the image-pinned catalog, registry, and scenario resources.
+Unsupported models, systems, or settings return an explicit client error. A BLIS
+failure is never retried through AISimulate.
+
+Simulator provenance includes the requested and resolved model, hardware,
+engine version, and any model-configuration relation reported by the selected
+simulator. Non-identical model configs are surfaced in the response so clients
+can label the comparison. BLIS predictions
+do not include KV-cache memory breakdowns; the single-backend `/memory` endpoint
+continues to use AISimulate and reports `simulator: "aisimulate"`.
+
+BLIS recommendation currently searches tensor-parallel sizes only and requires
+a concurrency workload. Its candidate ceiling is the same
+`AISIMULATORS_MAX_CANDIDATE_GPUS` service setting used by AISimulate, further
+limited by the selected system's one-node GPU count because this request contract
+does not specify an inter-node fabric. A total search budget bounds the individual
+simulations. The service caps that budget at 60 seconds; the web
+gateway may lower it further to leave room before its request deadline. The
+response reports the configured, hardware, and effective ceilings plus the
+actual candidate and evaluated GPU counts.
+
 The image sets `BLIS_CATALOG`, `BLIS_REGISTRY`, `BLIS_SCENARIOS` and
 `BLIS_SUPPORT`. BLIS itself only reads `BLIS_CATALOG` from the environment; the
 registry and scenario directory have no environment fallback, so callers must pass
