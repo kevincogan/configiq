@@ -33,6 +33,7 @@ _WEIGHT_QUANTIZATION = {
     "nvfp4": "nvfp4",
 }
 _CACHE_DTYPE = {
+    "half": None,
     "bf16": "bf16",
     "fp16": "fp16",
     "fp8": "fp8",

@@ -165,6 +165,12 @@ def test_serving_config_reports_only_fields_stated_by_scenario():
     assert serving_config["enable_chunked_prefill"] is None
 
 
+def test_half_cache_dtype_leaves_the_blis_model_default_unmodified():
+    _scenario, deployment = build_documents(_scenario_request(cache_dtype="half"))
+
+    assert "cache_dtype" not in deployment["pools"][0]["engine"]
+
+
 def test_scenario_rejects_cross_node_and_unrepresentable_parallelism():
     with pytest.raises(BlisUnsupportedRequest, match="single-node"):
         build_documents(_scenario_request(tp=16))
