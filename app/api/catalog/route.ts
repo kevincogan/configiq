@@ -16,9 +16,15 @@ import { recordErrorCode } from '@/lib/otel-metrics'
 // client below is gatewayTimeoutSeconds() — the longer recommend/predict timeout.
 const DEFAULT_TIMEOUT_SECONDS = 30
 
-function catalogResponse(systems: unknown[], models: unknown[], backends: unknown[], networks: string[]) {
+function catalogResponse(
+  systems: unknown[],
+  models: unknown[],
+  backends: unknown[],
+  networks: string[],
+  simulatorSupport: unknown,
+) {
   return NextResponse.json(
-    { systems, models, backends, networks, timeoutSeconds: gatewayTimeoutSeconds() },
+    { systems, models, backends, networks, simulatorSupport, timeoutSeconds: gatewayTimeoutSeconds() },
     {
       status: 200,
       headers: {
@@ -29,6 +35,51 @@ function catalogResponse(systems: unknown[], models: unknown[], backends: unknow
       },
     },
   )
+}
+
+/**
+ * Support reported by a simulator other than the default one: the models and
+ * systems it can price, plus its backend/version table. AISimulate is the
+ * top-level catalog, so this only adds per-simulator overrides.
+ *
+ * Best effort: an older AISimulators build has no `simulator` parameter, and a
+ * simulator failure must not take down the catalog. Any failed part omits that
+ * simulator, which the client treats as "no override".
+ */
+async function simulatorCapabilities(
+  baseUrl: string,
+  simulator: string,
+  timeoutSeconds: number,
+): Promise<unknown> {
+  const options = (): RequestInit => ({
+    headers: { Accept: 'application/json' },
+    cache: 'no-store',
+    signal: AbortSignal.timeout(timeoutSeconds * 1000),
+  })
+  try {
+    const responses = await Promise.all([
+      fetch(`${baseUrl}/backends?simulator=${simulator}`, options()),
+      fetch(`${baseUrl}/models?simulator=${simulator}`, options()),
+      fetch(`${baseUrl}/systems?simulator=${simulator}`, options()),
+    ])
+    if (!responses.every(response => response.ok)) return null
+    const [backendsData, modelsData, systemsData] = await Promise.all(
+      responses.map(response => response.json()),
+    )
+    const backends = catalogList(backendsData, 'backends')
+    const models = catalogList(modelsData, 'models')
+    const systems = catalogList(systemsData, 'systems')
+    if (!backends || !models || !systems) return null
+    const release = (backendsData as Record<string, unknown>).blis_version
+    return {
+      version: typeof release === 'string' ? release : null,
+      backends,
+      models,
+      systems,
+    }
+  } catch {
+    return null
+  }
 }
 
 function catalogList(data: unknown, key: 'systems' | 'models' | 'backends' | 'networks'): unknown[] | null {
@@ -132,10 +183,12 @@ export async function GET(request: Request) {
       const networks = (catalogList(catalogData, 'networks') ?? [])
         .filter((network): network is string => typeof network === 'string')
       if (!systems || !models || !validCatalogEntries(systems, models, backends)) return invalidCatalogResponse()
-      return catalogResponse(systems, models, backends, networks)
+      const rawSupport = (catalogData as Record<string, unknown>).simulatorSupport
+      const simulatorSupport = rawSupport && typeof rawSupport === 'object' ? rawSupport : {}
+      return catalogResponse(systems, models, backends, networks, simulatorSupport)
     }
 
-    const [systemsRes, modelsRes, backendsResult, networksResult] = await Promise.all([
+    const [systemsRes, modelsRes, backendsResult, networksResult, blisSupport] = await Promise.all([
       fetch(`${baseUrl}/systems?include=specs`, {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
@@ -156,6 +209,9 @@ export async function GET(request: Request) {
         cache: 'no-store',
         signal: AbortSignal.timeout(timeoutSeconds * 1000),
       }).then(response => ({ response })).catch(() => ({ response: null })),
+      // BLIS reports its own support surface through the simulator-scoped
+      // endpoints. It is the only non-default simulator today.
+      simulatorCapabilities(baseUrl, 'blis', timeoutSeconds),
     ])
 
     if (!systemsRes.ok || !modelsRes.ok) {
@@ -208,7 +264,8 @@ export async function GET(request: Request) {
     const models = catalogList(modelsData, 'models')
     const backends = catalogList(backendsData, 'backends') ?? []
     if (!systems || !models || !validCatalogEntries(systems, models, backends)) return invalidCatalogResponse()
-    return catalogResponse(systems, models, backends, networks)
+    const simulatorSupport = blisSupport ? { blis: blisSupport } : {}
+    return catalogResponse(systems, models, backends, networks, simulatorSupport)
   } catch (err: unknown) {
     if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
       recordErrorCode('/api/catalog', 'AISIM_TIMEOUT', 504)

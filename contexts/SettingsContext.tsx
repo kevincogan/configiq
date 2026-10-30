@@ -35,6 +35,15 @@ const STORAGE_KEYS = {
   pricingSource: 'settings_pricing_source',
 } as const;
 
+/**
+ * A version pin means something different in each simulator (an AISimulate
+ * namespace vs. a literal engine release), so it is stored per simulator.
+ * The default simulator reuses the legacy unsuffixed key for migration.
+ */
+function versionStorageKey(simulator: Simulator): string {
+  return `${STORAGE_KEYS.backendVersion}:${simulator}`;
+}
+
 interface SettingsState {
   hydrated: boolean;
   defaultModel: string;
@@ -115,8 +124,16 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem(STORAGE_KEYS.simulator, activeSimulator);
       }
 
-      const savedVersion = localStorage.getItem(STORAGE_KEYS.backendVersion);
+      // The legacy unsuffixed key only ever held the default simulator's pin.
+      const legacyVersion = activeSimulator === DEFAULT_SIMULATOR
+        ? localStorage.getItem(STORAGE_KEYS.backendVersion)
+        : null;
+      const savedVersion = localStorage.getItem(versionStorageKey(activeSimulator)) ?? legacyVersion;
       setBackendVersionState(savedVersion ?? '');
+      if (legacyVersion !== null) {
+        localStorage.setItem(versionStorageKey(activeSimulator), legacyVersion);
+        localStorage.removeItem(STORAGE_KEYS.backendVersion);
+      }
 
       const savedCostings = localStorage.getItem(STORAGE_KEYS.costingsEnabled);
       setCostingsEnabledState(savedCostings === 'true');
@@ -156,19 +173,22 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem(STORAGE_KEYS.inferenceBackend, v);
     // Settings resolves the backend's default version from the live catalog.
     setBackendVersionState('');
-    localStorage.setItem(STORAGE_KEYS.backendVersion, '');
+    localStorage.setItem(versionStorageKey(simulator), '');
   }, [simulator]);
 
   const setSimulator = React.useCallback((v: Simulator) => {
     if (!isSimulatorBackendCompatible(v, inferenceBackend)) return;
     setSimulatorState(v);
     localStorage.setItem(STORAGE_KEYS.simulator, v);
+    // Load the version saved for the simulator being switched to. The two
+    // simulators' version namespaces are unrelated, so never carry one over.
+    setBackendVersionState(localStorage.getItem(versionStorageKey(v)) ?? '');
   }, [inferenceBackend]);
 
   const setBackendVersion = React.useCallback((v: string) => {
     setBackendVersionState(v);
-    localStorage.setItem(STORAGE_KEYS.backendVersion, v);
-  }, []);
+    localStorage.setItem(versionStorageKey(simulator), v);
+  }, [simulator]);
 
   const setCostingsEnabled = React.useCallback((v: boolean) => {
     setCostingsEnabledState(v);

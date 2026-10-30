@@ -9,13 +9,23 @@ from pathlib import Path
 
 from .manifest import BlisManifestError
 
+#: The BLIS release this build is pinned to. The image sets BLIS_VERSION from the
+#: Containerfile's build arg; the literal is the value a source checkout gets, so
+#: the reported release never silently drifts from the pin.
+DEFAULT_BLIS_RELEASE = "0.14.0"
+
 
 @dataclass(frozen=True)
 class BlisRuntime:
     binary: str
     catalog: str
     registry: str
-    scenarios: str
+
+
+def blis_release() -> str:
+    """Return the BLIS release this image was built from."""
+    release = os.environ.get("BLIS_VERSION", "").strip()
+    return release or DEFAULT_BLIS_RELEASE
 
 
 def _required_directory(name: str, default: str) -> str:
@@ -49,5 +59,4 @@ def resolve_runtime() -> BlisRuntime:
         binary=str(binary_path),
         catalog=_required_directory("BLIS_CATALOG", "/opt/blis/catalog"),
         registry=_required_directory("BLIS_REGISTRY", "/opt/blis/registry"),
-        scenarios=_required_directory("BLIS_SCENARIOS", "/opt/blis/scenarios"),
     )

@@ -290,53 +290,25 @@ def test_added_model_records_the_equivalent_upstream_entry_under_another_name(tm
     assert manifest["equivalent_catalog_name"] == "glm-5"
 
 
-def test_manifest_records_hardware_networks_and_bundled_scenarios(tmp_path) -> None:
+def test_manifest_records_hardware_and_networks(tmp_path) -> None:
     catalog = tmp_path / "catalog"
     write_upstream(catalog, "model", hf_config())
     (catalog / "hardware").mkdir()
     (catalog / "hardware/h100.yaml").write_text("kind: Chip\n")
     (catalog / "networks").mkdir()
     (catalog / "networks/ib.yaml").write_text("kind: Fabric\n")
-    scenarios = tmp_path / "scenarios"
-    scenarios.mkdir()
-    (scenarios / "model-h100.yaml").write_text(
-        "kind: Scenario\n"
-        "name: model-h100\n"
-        "model: model\n"
-        "cluster:\n"
-        "  hardware: h100\n"
-        "---\n"
-        "kind: Deployment\n"
-        "name: model-h100\n"
-        "pools:\n"
-        "  - role: colocated\n"
-        "    parallel:\n"
-        "      tp: 2\n"
-        "      pp: 1\n"
-        "      dp: 1\n"
-        "    engine:\n"
-        "      quantization: nvfp4\n"
-    )
     source = write_source(tmp_path / "source", {"Org--Model": hf_config()})
     write_derive_stub(catalog)
     manifest_path = tmp_path / "out/support.json"
 
-    export_catalog(catalog, source, "1.2.3", manifest_path=manifest_path, scenarios_dir=scenarios)
+    export_catalog(catalog, source, "1.2.3", manifest_path=manifest_path)
 
     manifest = json.loads(manifest_path.read_text())
     assert manifest["schema_version"] == 1
     assert manifest["aisimulate_version"] == "1.2.3"
     assert manifest["hardware"] == ["h100"]
     assert manifest["networks"] == ["ib"]
-    assert manifest["scenarios"] == [
-        {
-            "name": "model-h100",
-            "file": "model-h100.yaml",
-            "model": "model",
-            "hardware": "h100",
-            "pools": [{"role": "colocated", "tp": 2, "pp": 1, "dp": 1, "quantization": "nvfp4"}],
-        }
-    ]
+    assert "scenarios" not in manifest
 
 
 def test_no_usable_configs_is_fatal(tmp_path) -> None:

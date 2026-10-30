@@ -34,7 +34,7 @@ import { ComboBox, type ComboBoxItem } from '@/components/ModelComboBox/ModelCom
 import { buildModelItems, needsHfConfig } from '@/lib/model-options';
 import { GpuSystemInput } from '@/components/ui/GpuSystemInput';
 import { SimulatorBadge } from '@/components/ui/SimulatorBadge'
-import { useCatalog, systemMemoryFraction, type ModelSpec } from '@/lib/hooks/useCatalog';
+import { useCatalog, systemMemoryFraction, engineVersionSupport, type ModelSpec } from '@/lib/hooks/useCatalog';
 import { GpuChipLoader } from '@/components/GpuChipLoader/GpuChipLoader';
 import { useSettings } from '@/contexts/SettingsContext';
 import { useCostings, resolveCloudRate } from '@/lib/hooks/useCostings';
@@ -131,7 +131,24 @@ export default function Performance() {
   console.log('Performance component mounting');
   const { hydrated, hfToken, defaultModel: settingsDefaultModel, inferenceBackend, backendVersion, simulator, costingsEnabled, preferredCloudProvider, pricingSource } = useSettings();
   const costings = useCostings(costingsEnabled, pricingSource);
-  const { gpuOptions: catalogGpus, modelOptions: catalogModels, modelSpecs, backendOptions, networkOptions, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
+  const { gpuOptions: allCatalogGpus, modelOptions: allCatalogModels, modelSpecs, backendOptions, networkOptions, simulatorSupport, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
+
+  // A simulator may price only a subset of the catalog. Its override narrows
+  // the pickers; no override means the top-level catalog is its support.
+  const support = simulatorSupport[simulator];
+  const catalogModels = support?.models ?? allCatalogModels;
+  const catalogGpus = React.useMemo(
+    () => (support
+      ? allCatalogGpus.filter(option => support.systems.includes(option.systemId))
+      : allCatalogGpus),
+    [support, allCatalogGpus],
+  );
+  const engineBackend = support?.backends.find(backend => backend.id === inferenceBackend)
+    ?? support?.backends[0];
+  const engineSupport = engineVersionSupport(engineBackend, backendVersion || engineBackend?.defaultVersion);
+  // Fail open when the service reports no per-version support: the API still
+  // refuses an unmodeled topology with a 422 that names the alternatives.
+  const disaggSupported = engineSupport?.disaggregated ?? true;
 
   const [model, setModel] = React.useState('');
   const [gpu, setGpu] = React.useState(() => getAppConfig().defaultSystem);
@@ -262,6 +279,15 @@ export default function Performance() {
   const selectedNetworkFabric = networkFabric ?? defaultNetworkFabric;
   const [prefillCfg, setPrefillCfg] = React.useState<PerfPhaseInput>({ tp: '1', pp: '1', workers: '1', batch: '1' });
   const [decodeCfg, setDecodeCfg] = React.useState<PerfPhaseInput>({ tp: '1', pp: '1', workers: '1', batch: '64' });
+
+  // A release without P/D modelling cannot run the selected topology; fall back
+  // to aggregated rather than letting the request fail.
+  React.useEffect(() => {
+    if (servingMode === 'disagg' && !disaggSupported) {
+      setServingMode('agg');
+      setTestResult(null);
+    }
+  }, [servingMode, disaggSupported]);
 
   const [islInput, setIslInput] = React.useState('2048');
   const [oslInput, setOslInput] = React.useState('128');
@@ -1311,7 +1337,7 @@ export default function Performance() {
           <Button
             variant="primary"
             onClick={() => { setTestResult(null); setTestError(null); setTestErrorCode(null); setCalcTrigger(t => t + 1); }}
-            isDisabled={isCalculating || !gpu || !model || catalogLoading || invalidISL || invalidOSL || invalidUsers || invalidTpSize || invalidPpSize || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen || (simulator === 'blis' && servingMode === 'disagg' && !selectedNetworkFabric)}
+            isDisabled={isCalculating || !gpu || !model || catalogLoading || invalidISL || invalidOSL || invalidUsers || invalidTpSize || invalidPpSize || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen || (servingMode === 'disagg' && !disaggSupported) || (simulator === 'blis' && servingMode === 'disagg' && !selectedNetworkFabric)}
           >
             {isCalculating ? 'Calculating...' : 'Calculate'}
           </Button>
@@ -1324,11 +1350,23 @@ export default function Performance() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
           <span style={{ fontSize: '12px', fontWeight: 600, fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.06em', color: '#3c3f42', whiteSpace: 'nowrap' }}>Serving mode:</span>
           <Button variant={servingMode === 'agg' ? 'secondary' : 'tertiary'} size="sm" onClick={() => { setServingMode('agg'); setTestResult(null); }}>Aggregated</Button>
-          <Button variant={servingMode === 'disagg' ? 'secondary' : 'tertiary'} size="sm" onClick={() => { setServingMode('disagg'); setTestResult(null); }}>Disaggregated</Button>
+          <Button
+            variant={servingMode === 'disagg' ? 'secondary' : 'tertiary'}
+            size="sm"
+            isDisabled={!disaggSupported}
+            onClick={() => { setServingMode('disagg'); setTestResult(null); }}
+          >
+            Disaggregated
+          </Button>
           {servingMode === 'disagg' && (
             <span style={{ fontSize: '12px', color: '#54585c' }}>Prefill and decode run on separate GPU pools.</span>
           )}
         </div>
+        {!disaggSupported && (
+          <div style={{ fontSize: 13, color: '#3c3f42', marginTop: 8 }}>
+            The selected simulator does not model prefill/decode disaggregation for vLLM {backendVersion || engineBackend?.defaultVersion}. Choose another version, or use aggregated serving.
+          </div>
+        )}
         {servingMode === 'disagg' && (
           <>
             {simulator === 'blis' && (

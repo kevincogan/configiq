@@ -18,7 +18,8 @@ from tools.api_service.blis.scenario import (
     ScenarioPoolRequest,
     ScenarioRequest,
     build_documents,
-    default_engine_version,
+    engine_version_support,
+    resolve_engine_version,
     write_scenario,
 )
 
@@ -51,7 +52,6 @@ def manifest() -> SupportManifest:
         }],
         "hardware": ["h100", "h200", "a100-sxm"],
         "networks": ["ib-400g"],
-        "scenarios": [],
     })
 
 
@@ -257,15 +257,52 @@ def test_disagg_documents_reject_missing_fabric():
 
 def test_blis_requires_exact_version_instead_of_resolving_aisimulate_aliases():
     with pytest.raises(BlisUnsupportedRequest, match="exact backend_version"):
-        default_engine_version("current")
+        resolve_engine_version("current")
 
 
-def test_run_command_uses_all_required_v013_resources():
+def test_engine_version_defaults_to_the_pd_capable_release():
+    assert resolve_engine_version(None) == "0.31.0"
+    assert resolve_engine_version("") == "0.31.0"
+    assert resolve_engine_version("0.29.0") == "0.29.0"
+
+
+def test_unmodeled_engine_version_names_the_modeled_releases():
+    with pytest.raises(BlisUnsupportedRequest) as error:
+        resolve_engine_version("0.24.0")
+
+    message = str(error.value)
+    assert "0.29.0, 0.31.0, 0.32.0" in message
+    assert "blank" in message
+
+
+def test_v032_scenario_states_an_explicit_context_window():
+    _scenario, deployment = build_documents(_scenario_request(engine_version="0.32.0"))
+
+    assert deployment["pools"][0]["engine"]["max_model_len"] == 2048 + 128
+
+
+def test_v032_refuses_a_disaggregated_topology():
+    request = _scenario_request(
+        engine_version="0.32.0",
+        fabric="ib-400g",
+        prefill_pool=_pool_request("prefill", nodes=1),
+        decode_pool=_pool_request("decode", nodes=1),
+    )
+    with pytest.raises(BlisUnsupportedRequest, match="does not model prefill/decode disaggregation"):
+        build_documents(request)
+
+
+def test_engine_version_support_reports_what_each_release_models():
+    assert engine_version_support("0.31.0") == {"disaggregated": True, "max_model_len_auto": True}
+    assert engine_version_support("0.32.0") == {"disaggregated": False, "max_model_len_auto": False}
+    assert engine_version_support("0.99.0") == {"disaggregated": False, "max_model_len_auto": False}
+
+
+def test_run_command_passes_catalog_registry_and_scenario_directory():
     runtime = BlisRuntime(
         binary="/opt/venv/bin/blis",
         catalog="/opt/blis/catalog",
         registry="/opt/blis/registry",
-        scenarios="/opt/blis/scenarios",
     )
 
     command = build_run_command(runtime, RunRequest(
@@ -293,7 +330,7 @@ def test_run_command_uses_all_required_v013_resources():
 
 
 def test_run_command_passes_p_and_d_instance_counts():
-    runtime = BlisRuntime("/opt/venv/bin/blis", "/catalog", "/registry", "/scenarios")
+    runtime = BlisRuntime("/opt/venv/bin/blis", "/catalog", "/registry")
     command = build_run_command(runtime, RunRequest(
         scenario="generated.yaml",
         scenario_directory="/tmp/scenarios",
@@ -334,7 +371,7 @@ def test_parse_metrics_prefers_cluster_aggregate_for_disagg_runs():
 
 
 def test_recommend_candidate_ceiling_uses_configured_limit_and_hardware(monkeypatch, manifest):
-    runtime = BlisRuntime("/opt/blis", "/catalog", "/registry", "/scenarios")
+    runtime = BlisRuntime("/opt/blis", "/catalog", "/registry")
     monkeypatch.setattr(blis_service, "load_support_manifest", lambda: manifest)
     monkeypatch.setattr(blis_service, "resolve_runtime", lambda: runtime)
     monkeypatch.setattr(
@@ -383,7 +420,7 @@ def test_recommend_candidate_ceiling_uses_configured_limit_and_hardware(monkeypa
 
 
 def test_recommend_includes_bounded_pd_topologies_when_fabric_is_selected(monkeypatch, manifest):
-    runtime = BlisRuntime("/opt/blis", "/catalog", "/registry", "/scenarios")
+    runtime = BlisRuntime("/opt/blis", "/catalog", "/registry")
     monkeypatch.setattr(blis_service, "load_support_manifest", lambda: manifest)
     monkeypatch.setattr(blis_service, "resolve_runtime", lambda: runtime)
     monkeypatch.setattr(
@@ -441,7 +478,7 @@ def test_recommend_includes_bounded_pd_topologies_when_fabric_is_selected(monkey
 
 
 def test_recommend_skips_pd_candidates_without_a_fabric(monkeypatch, manifest):
-    runtime = BlisRuntime("/opt/blis", "/catalog", "/registry", "/scenarios")
+    runtime = BlisRuntime("/opt/blis", "/catalog", "/registry")
     monkeypatch.setattr(blis_service, "load_support_manifest", lambda: manifest)
     monkeypatch.setattr(blis_service, "resolve_runtime", lambda: runtime)
     monkeypatch.setattr(blis_service, "load_system_spec", lambda _system: {"node": {"num_gpus_per_node": 4}})
@@ -467,7 +504,7 @@ def test_recommend_skips_pd_candidates_without_a_fabric(monkeypatch, manifest):
 
 
 def test_disagg_estimate_builds_p_and_d_pools_and_uses_requested_fabric(monkeypatch, manifest):
-    runtime = BlisRuntime("/opt/blis", "/catalog", "/registry", "/scenarios")
+    runtime = BlisRuntime("/opt/blis", "/catalog", "/registry")
     monkeypatch.setattr(blis_service, "load_support_manifest", lambda: manifest)
     monkeypatch.setattr(blis_service, "resolve_runtime", lambda: runtime)
     monkeypatch.setattr(
