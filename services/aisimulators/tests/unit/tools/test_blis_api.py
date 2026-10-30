@@ -329,6 +329,7 @@ def test_backends_endpoint_reports_blis_versions_and_their_support():
     assert backend["memory_fraction"] is None
     assert backend["systems"] == {}
     assert backend["system_defaults"] == {}
+    assert backend["disaggregation_requires_fabric"] is True
     assert backend["version_support"]["0.31.0"] == {
         "disaggregated": True,
         "max_model_len_auto": True,

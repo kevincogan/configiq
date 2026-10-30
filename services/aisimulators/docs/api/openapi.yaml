@@ -1227,6 +1227,12 @@ components:
               memory_fraction:
                 type: number
                 nullable: true
+        disaggregation_requires_fabric:
+          type: boolean
+          description: |
+            Whether a prefill/decode topology needs an inter-node fabric selected
+            before the request is sent. BLIS prices the KV transfer through a named
+            fabric; AISimulate's P/D search takes none.
         version_support:
           type: object
           description: Per-version capabilities. Present when simulator=blis.

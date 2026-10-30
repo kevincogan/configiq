@@ -68,7 +68,7 @@ describe('RecommendContext request construction', () => {
     expect(body).toHaveProperty('fabric', fabric)
   })
 
-  it('does not add a BLIS fabric to AISimulate requests', async () => {
+  it('forwards a caller-selected fabric for any simulator', async () => {
     await render()
 
     await act(async () => {
@@ -88,6 +88,27 @@ describe('RecommendContext request construction', () => {
     const fetchMock = vi.mocked(fetch)
     const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string)
     expect(body.simulator).toBe('aisimulate')
+    expect(body).toHaveProperty('fabric', 'roce-200g')
+  })
+
+  it('omits a fabric the caller did not select', async () => {
+    await render()
+
+    await act(async () => {
+      startSizing({
+        model_path: 'org/model',
+        system: 'h200_sxm',
+        isl: 2048,
+        osl: 128,
+        ttft: 1000,
+        target_concurrency: 8,
+        simulator: 'aisimulate',
+      })
+      await Promise.resolve()
+    })
+
+    const fetchMock = vi.mocked(fetch)
+    const body = JSON.parse(fetchMock.mock.calls[0][1]?.body as string)
     expect(body).not.toHaveProperty('fabric')
   })
 })

@@ -149,6 +149,9 @@ export default function Performance() {
   // Fail open when the service reports no per-version support: the API still
   // refuses an unmodeled topology with a 422 that names the alternatives.
   const disaggSupported = engineSupport?.disaggregated ?? true;
+  // The simulator reports whether a P/D run needs a fabric; AISimulate's P/D
+  // search takes none, so the fabric control stays hidden there.
+  const fabricRequired = engineBackend?.disaggregationRequiresFabric ?? false;
 
   const [model, setModel] = React.useState('');
   const [gpu, setGpu] = React.useState(() => getAppConfig().defaultSystem);
@@ -474,7 +477,7 @@ export default function Performance() {
           batch_size: testConcurrentUsers,
           tp_size: testTpSize,
           simulator,
-          ...(servingMode === 'disagg' && simulator === 'blis' && selectedNetworkFabric ? { fabric: selectedNetworkFabric } : {}),
+          ...(servingMode === 'disagg' && fabricRequired && selectedNetworkFabric ? { fabric: selectedNetworkFabric } : {}),
           ...(effectiveContextLimit != null ? { max_seq_len: effectiveContextLimit } : {}),
           ...(prefillMaxSeqLen != null ? { prefill_max_seq_len: prefillMaxSeqLen } : {}),
           ...(decodeMaxSeqLen != null ? { decode_max_seq_len: decodeMaxSeqLen } : {}),
@@ -766,7 +769,7 @@ export default function Performance() {
       system: gpu || '(select GPU)',
       backend: inferenceBackend,
       simulator,
-       ...(servingMode === 'disagg' && simulator === 'blis' && selectedNetworkFabric && { fabric: selectedNetworkFabric }),
+       ...(servingMode === 'disagg' && fabricRequired && selectedNetworkFabric && { fabric: selectedNetworkFabric }),
       isl: testISL,
       osl: testOSL,
       ...(effectiveContextLimit != null && { max_seq_len: effectiveContextLimit }),
@@ -805,7 +808,7 @@ export default function Performance() {
         decode_batch_size: parsePerfPhase(decodeCfg).batch,
       })
     };
-  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, effectiveContextLimit, prefillMaxSeqLen, decodeMaxSeqLen, gpuMemoryUtilization, vllmOverride, vllmManualMaxNumSeqs, vllmManualChunkedPrefill, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize, simulator, selectedNetworkFabric]);
+  }, [model, gpu, inferenceBackend, testISL, testOSL, testConcurrentUsers, effectiveContextLimit, prefillMaxSeqLen, decodeMaxSeqLen, gpuMemoryUtilization, vllmOverride, vllmManualMaxNumSeqs, vllmManualChunkedPrefill, testResult, testTpSize, testPpSize, currentCatalogGpu, testPrefix, backendVersion, testWeightPrecision, testKVCachePrecision, servingMode, prefillCfg, decodeCfg, modelSpecs, hfConfig, catalogModels, testMoeQuantMode, testMoeEpSize, testMoeEtpSize, simulator, selectedNetworkFabric, fabricRequired]);
 
   // Copy API request body to clipboard
   const handleCopyAPIRequest = async () => {
@@ -1337,7 +1340,7 @@ export default function Performance() {
           <Button
             variant="primary"
             onClick={() => { setTestResult(null); setTestError(null); setTestErrorCode(null); setCalcTrigger(t => t + 1); }}
-            isDisabled={isCalculating || !gpu || !model || catalogLoading || invalidISL || invalidOSL || invalidUsers || invalidTpSize || invalidPpSize || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen || (servingMode === 'disagg' && !disaggSupported) || (simulator === 'blis' && servingMode === 'disagg' && !selectedNetworkFabric)}
+            isDisabled={isCalculating || !gpu || !model || catalogLoading || invalidISL || invalidOSL || invalidUsers || invalidTpSize || invalidPpSize || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen || (servingMode === 'disagg' && !disaggSupported) || (fabricRequired && servingMode === 'disagg' && !selectedNetworkFabric)}
           >
             {isCalculating ? 'Calculating...' : 'Calculate'}
           </Button>
@@ -1369,7 +1372,7 @@ export default function Performance() {
         )}
         {servingMode === 'disagg' && (
           <>
-            {simulator === 'blis' && (
+            {fabricRequired && (
               <div style={{ marginTop: 14, maxWidth: 360 }}>
                 <label className={styles.accFieldLabel} htmlFor="predict-network-fabric">Inter-node fabric</label>
                 <FormSelect
@@ -1389,7 +1392,7 @@ export default function Performance() {
                     ? 'No network fabrics were returned by the simulator catalog.'
                     : selectedNetworkFabric === 'roce-200g' && networkFabric === null
                       ? 'RoCE 200G is preselected; change it if your cluster uses another fabric.'
-                      : 'BLIS uses this fabric to price prefill-to-decode KV transfer.'}
+                      : 'The simulator uses this fabric to price prefill-to-decode KV transfer.'}
                 </div>
               </div>
             )}

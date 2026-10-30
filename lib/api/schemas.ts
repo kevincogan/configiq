@@ -49,13 +49,12 @@ export const RecommendRequestSchema = z.object({
   // HF config.json for models AISimulators can't resolve from its catalog (nullish = resolve from HF).
   model_config: z.record(z.string(), z.unknown()).nullish(),
   simulator: z.enum(['aisimulate', 'blis']).default('aisimulate'),
+  // Whether a simulator consumes a fabric is its own capability; the service
+  // rejects one it does not support instead of this schema matching on its ID.
   fabric: z.string().min(1).nullish(),
 }).strict().refine(
   data => (data.target_request_rate != null) !== (data.target_concurrency != null),
   { message: 'Exactly one of target_request_rate or target_concurrency must be provided' }
-).refine(
-  data => data.simulator === 'blis' || data.fabric == null,
-  { message: 'fabric is only supported when simulator is blis', path: ['fabric'] }
 )
 
 export type RecommendRequest = z.infer<typeof RecommendRequestSchema>

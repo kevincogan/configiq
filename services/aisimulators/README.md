@@ -117,7 +117,9 @@ modeled versions, the literal default, and a `version_support` map
 (`disaggregated`, `max_model_len_auto`) per release. `/models` and `/systems`
 with the same parameter return only the AISimulate IDs and systems BLIS can
 price. The envelopes include `simulator`; `/backends` also reports
-`blis_version`.
+`blis_version`. Each backend entry reports
+`disaggregation_requires_fabric`, so a client knows whether a P/D topology
+needs a fabric selection without matching on the simulator ID.
 
 Simulator provenance includes the requested and resolved model, hardware,
 engine version, and any model-configuration relation reported by the selected

@@ -233,6 +233,9 @@ export default function Sizing() {
     ?? support?.backends[0];
   const engineSupport = engineVersionSupport(engineBackend, backendVersion || engineBackend?.defaultVersion);
   const disaggSupported = engineSupport?.disaggregated ?? true;
+  // The simulator reports whether a P/D run needs a fabric; AISimulate's P/D
+  // search takes none, so the fabric control stays hidden there.
+  const fabricRequired = engineBackend?.disaggregationRequiresFabric ?? false;
   const MODEL_OPTIONS = catalogModels;
   const [networkFabric, setNetworkFabric] = React.useState<string | null>(null);
   const defaultNetworkFabric = networkOptions.includes('roce-200g') ? 'roce-200g' : '';
@@ -429,7 +432,7 @@ export default function Sizing() {
       simulator,
       // A release without P/D modelling can only search aggregated candidates,
       // so do not send a fabric that asks for a disaggregated topology.
-      ...(simulator === 'blis' ? { fabric: disaggSupported ? selectedNetworkFabric || null : null } : {}),
+      ...(fabricRequired ? { fabric: disaggSupported ? selectedNetworkFabric || null : null } : {}),
     });
   };
 
@@ -483,7 +486,7 @@ export default function Sizing() {
           <GpuSystemInput id="adv-gpu" value={gpuSystem} onChange={setGpuSystem} gpuOptions={catalogGpus} />
         </div>
 
-        {simulator === 'blis' && (
+        {fabricRequired && (
           <div style={{ marginTop: 14, maxWidth: 360 }}>
             <label className={styles.fieldLabel} htmlFor="recommend-network-fabric">Inter-node fabric</label>
             <FormSelect
@@ -506,8 +509,8 @@ export default function Sizing() {
                   : selectedNetworkFabric === 'roce-200g' && networkFabric === null
                     ? 'RoCE 200G is preselected; choose another fabric if needed. Select None for aggregate-only search.'
                     : selectedNetworkFabric
-                      ? 'BLIS searches aggregate and P/D candidates using this fabric.'
-                      : 'No fabric selected; BLIS searches aggregate candidates only.'}
+                      ? 'The simulator searches aggregate and P/D candidates using this fabric.'
+                      : 'No fabric selected; the simulator searches aggregate candidates only.'}
             </div>
           </div>
         )}
@@ -517,7 +520,7 @@ export default function Sizing() {
           <button
             className={styles.calcBtn}
             onClick={handleCalculate}
-             disabled={isLoading || !model.includes('/') || invalidISL || invalidOSL || invalidTTFT || invalidTpot || invalidConcurrency || invalidLatency || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen || (simulator === 'blis' && catalogLoading)}
+             disabled={isLoading || !model.includes('/') || invalidISL || invalidOSL || invalidTTFT || invalidTpot || invalidConcurrency || invalidLatency || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen || catalogLoading}
           >
             {isLoading ? 'Calculating...' : 'Calculate'}
           </button>

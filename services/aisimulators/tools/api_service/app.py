@@ -1172,6 +1172,8 @@ def _blis_backends() -> dict[str, Any]:
     ``system_defaults`` are therefore empty rather than filled with invented
     per-system rows; ``version_support`` is the extra field that lets a client
     disable a topology the selected release cannot model.
+    ``disaggregation_requires_fabric`` tells a client whether a P/D topology
+    needs an inter-node fabric it must collect from the user first.
     """
     return {
         "simulator": "blis",
@@ -1188,6 +1190,9 @@ def _blis_backends() -> dict[str, Any]:
                 "runtime_field": "gpu_memory_utilization",
                 "systems": {},
                 "system_defaults": {},
+                # A P/D run transfers KV between pools, and BLIS prices that
+                # transfer through a named fabric, so the request must choose one.
+                "disaggregation_requires_fabric": True,
                 "version_support": {
                     version: dict(support) for version, support in ENGINE_VERSION_SUPPORT.items()
                 },
@@ -1265,6 +1270,8 @@ def get_backends(
                 }
                 for system, version in system_defaults.items()
             },
+            # AISimulate's P/D search takes no fabric; no extra input is needed.
+            "disaggregation_requires_fabric": False,
         })
     return {"simulator": "aisimulate", "backends": result}
 

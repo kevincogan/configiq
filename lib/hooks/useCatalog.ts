@@ -62,6 +62,11 @@ export interface BackendOption {
    * client must not offer a topology the selected release cannot run.
    */
   versionSupport: Record<string, EngineVersionSupport>
+  /**
+   * Whether a P/D topology needs an inter-node fabric selected first. The
+   * simulator reports this so the client does not infer it from its ID.
+   */
+  disaggregationRequiresFabric: boolean
 }
 
 /** Per-version capabilities reported by a simulator that models them itself. */
@@ -155,6 +160,7 @@ export function mapBackendOption(backend: Record<string, unknown>): BackendOptio
       : {},
     systemDefaults,
     versionSupport: mapVersionSupport(backend.version_support),
+    disaggregationRequiresFabric: backend.disaggregation_requires_fabric === true,
   }
 }
 
