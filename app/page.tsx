@@ -51,6 +51,9 @@ const tools = [
     href: "/predict",
     icon: <BoltIcon />,
   },
+];
+
+const costingsTools = [
   {
     title: "Hybrid savings",
     description:
@@ -58,9 +61,6 @@ const tools = [
     href: "/hybrid-savings",
     icon: <MigrationIcon />,
   },
-];
-
-const costingsTools = [
   {
     title: "Routing economics",
     description:

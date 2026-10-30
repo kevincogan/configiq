@@ -844,15 +844,14 @@ describe('Hybrid page composition', () => {
     expect(host.querySelector('#hybrid-owned-configuration')).toBeNull()
   })
 
-  it('keeps Hybrid available without enabling other experimental costings', async () => {
+  it('requires experimental costings before showing Hybrid or enabling pricing requests', async () => {
     vi.mocked(useSettings).mockReturnValue({ ...vi.mocked(useSettings)(), costingsEnabled: false })
     await render()
-    expect(host.textContent).not.toContain('Enable experimental costings')
-    expect(host.querySelector('form')).not.toBeNull()
-    expect(useCostings).toHaveBeenCalledWith(true, 'merged', 'models')
-    expect(useInfrastructureOffers).toHaveBeenCalledWith(true)
-    await click('Calculate')
-    expect(host.querySelectorAll('[class*="costValue"]')).toHaveLength(3)
+    expect(host.textContent).toContain('Enable experimental costings')
+    expect(host.querySelector('form')).toBeNull()
+    expect(useCostings).toHaveBeenCalledWith(false, 'merged', 'models')
+    expect(useInfrastructureOffers).toHaveBeenCalledWith(false)
+    expect(fetch).not.toHaveBeenCalled()
   })
 
   it('disables calculation when the feed has no exact hosted price', async () => {

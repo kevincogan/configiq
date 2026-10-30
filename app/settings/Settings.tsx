@@ -352,7 +352,7 @@ export function Settings() {
                 </span>
               </div>
               <div className={styles.sectionDesc}>
-                Experimental Cluster Cost and Routing Economics tools. Hybrid Savings and Sources are always available.
+                Experimental GPU cloud pricing, hardware costs, and on-prem cost modelling.
               </div>
             </div>
             {costingsSaved && <Label color="green" icon={<CheckCircleIcon />}>Saved</Label>}
