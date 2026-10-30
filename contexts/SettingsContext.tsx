@@ -38,7 +38,8 @@ const STORAGE_KEYS = {
 /**
  * A version pin means something different in each simulator (an AISimulate
  * namespace vs. a literal engine release), so it is stored per simulator.
- * The default simulator reuses the legacy unsuffixed key for migration.
+ * On load, the default simulator migrates the legacy unsuffixed key to its
+ * scoped key.
  */
 function versionStorageKey(simulator: Simulator): string {
   return `${STORAGE_KEYS.backendVersion}:${simulator}`;

@@ -66,6 +66,14 @@ async function simulatorCapabilities(
     const [backendsData, modelsData, systemsData] = await Promise.all(
       responses.map(response => response.json()),
     )
+    // An older AISimulators build ignores the unknown `simulator` parameter and
+    // answers with its AISimulate data at HTTP 200. Require each envelope to echo
+    // the simulator we asked for, so a rolling deploy cannot advertise AISimulate
+    // support as BLIS.
+    const echoesSimulator = (data: unknown) =>
+      !!data && typeof data === 'object' &&
+      (data as Record<string, unknown>).simulator === simulator
+    if (![backendsData, modelsData, systemsData].every(echoesSimulator)) return null
     const backends = catalogList(backendsData, 'backends')
     const models = catalogList(modelsData, 'models')
     const systems = catalogList(systemsData, 'systems')

@@ -251,8 +251,10 @@ def export_catalog(
     """Augment ``catalog_root`` with AISimulate configs and return the support manifest."""
     source_root = source_root or Path(str(resources.files("aisimulate_core") / "model_configs"))
     wheel = installed_wheel()
+    # An explicit package_version is the caller's stated provenance, so it wins:
+    # only a version derived from the installed wheel records that wheel's build.
+    build = wheel["build"] if package_version is None else None
     package_version = package_version or wheel["version"] or version("aisimulate")
-    build = wheel["build"]
     derive_script = derive_script or catalog_root / "scripts" / "derive_graph.py"
     destination_root = catalog_root / "models"
     destination_root.mkdir(parents=True, exist_ok=True)

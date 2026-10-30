@@ -126,8 +126,9 @@ npm run type-check # TypeScript check without build
 
 ### Commits
 
-Every commit must carry a `Signed-off-by:` trailer matching the author. Use
-`git commit -s` (or `git commit --amend -s` to fix an existing commit).
+Every commit must carry a `Signed-off-by:` trailer matching the committer
+identity. Use `git commit -s` (or `git commit --amend -s` to fix an existing
+commit).
 
 ## Typography & color (legibility rules)
 

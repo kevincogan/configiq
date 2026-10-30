@@ -122,6 +122,26 @@ def test_export_records_the_installed_release_build_as_the_model_revision(tmp_pa
     assert result.manifest["aisimulate_wheel"]["build"] == "deploy-api-v0.13.0+dd7494b9"
 
 
+def test_explicit_package_version_wins_over_the_installed_build(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        export_blis_catalog,
+        "installed_wheel",
+        lambda: {
+            "version": "0.13.0",
+            "build": "deploy-api-v0.13.0+dd7494b9",
+            "url": "https://example.invalid/aisimulate-0.13.0.whl",
+        },
+    )
+    catalog = tmp_path / "catalog"
+    source = write_source(tmp_path / "source", {"Org--Model": hf_config()})
+    write_derive_stub(catalog)
+
+    result = export_catalog(catalog, source, "1.2.3")
+
+    assert 'revision: "aisimulate-1.2.3"' in (catalog / "models/model/model.yaml").read_text()
+    assert result.manifest["aisimulate_version"] == "1.2.3"
+
+
 def test_export_preserves_identical_upstream_entry_and_reports_it_identical(tmp_path) -> None:
     catalog = tmp_path / "catalog"
     entry = write_upstream(catalog, "model", hf_config())

@@ -22,6 +22,7 @@ vi.mock('@/lib/app-config', () => ({
 import { isSimulatorBackendCompatible, SettingsProvider, useSettings } from './SettingsContext'
 
 const VERSION_KEY = 'settings_backend_version_v2'
+const DEFAULT_SIMULATOR_VERSION_KEY = `${VERSION_KEY}:aisimulate`
 const LEGACY_VERSION_KEY = 'settings_backend_version'
 const SIMULATOR_KEY = 'settings_simulator'
 
@@ -93,7 +94,7 @@ describe('Backend version persistence', () => {
 
     expect(state().backendVersion).toBe('')
     expect(state().simulator).toBe('aisimulate')
-    expect(localStorage.getItem(VERSION_KEY)).toBe('')
+    expect(localStorage.getItem(DEFAULT_SIMULATOR_VERSION_KEY)).toBe('')
   })
 
   it('persists an explicit user choice', async () => {
@@ -103,7 +104,7 @@ describe('Backend version persistence', () => {
 
     expect(state().backendVersion).toBe('0.24.0')
     expect(state().simulator).toBe('aisimulate')
-    expect(localStorage.getItem(VERSION_KEY)).toBe('0.24.0')
+    expect(localStorage.getItem(DEFAULT_SIMULATOR_VERSION_KEY)).toBe('0.24.0')
   })
 
   it('restores the persisted global simulator selection', async () => {
