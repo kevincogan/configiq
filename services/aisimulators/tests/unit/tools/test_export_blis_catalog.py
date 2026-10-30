@@ -18,6 +18,23 @@ from tools.export_blis_catalog import (
 )
 
 
+@pytest.fixture(autouse=True)
+def pinned_wheel_metadata(monkeypatch) -> None:
+    """Pin the wheel metadata the exporter reads.
+
+    ``export_catalog`` consults the installed distribution for the release build it
+    records as each derived ``model.yaml`` revision. Without this the assertions
+    below would depend on how (or whether) ``aisimulate`` is installed in the
+    environment running the tests — CI installs it from the pinned wheel URL, so
+    ``direct_url.json`` is present there and absent on a bare checkout.
+    """
+    monkeypatch.setattr(
+        export_blis_catalog,
+        "installed_wheel",
+        lambda: {"version": "1.2.3", "build": None, "url": None},
+    )
+
+
 def hf_config(hidden_size: int = 1024) -> dict:
     return {"hidden_size": hidden_size, "num_hidden_layers": 2}
 
@@ -82,6 +99,27 @@ def test_export_adds_models_with_a_derived_graph_and_skips_quant_configs(tmp_pat
     assert result.manifest["models"]["model"]["origin"] == "aisimulate"
     assert result.manifest["models"]["model"]["aisimulate_model_id"] == "Org/Model"
     assert result.manifest["models"]["model"]["quantization"]["aisimulate"] is None
+
+
+def test_export_records_the_installed_release_build_as_the_model_revision(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        export_blis_catalog,
+        "installed_wheel",
+        lambda: {
+            "version": "0.13.0",
+            "build": "deploy-api-v0.13.0+dd7494b9",
+            "url": "https://example.invalid/aisimulate-0.13.0.whl",
+        },
+    )
+    catalog = tmp_path / "catalog"
+    source = write_source(tmp_path / "source", {"Org--Model": hf_config()})
+    write_derive_stub(catalog)
+
+    result = export_catalog(catalog, source)
+
+    model_yaml = (catalog / "models/model/model.yaml").read_text()
+    assert 'revision: "deploy-api-v0.13.0+dd7494b9"' in model_yaml
+    assert result.manifest["aisimulate_wheel"]["build"] == "deploy-api-v0.13.0+dd7494b9"
 
 
 def test_export_preserves_identical_upstream_entry_and_reports_it_identical(tmp_path) -> None:

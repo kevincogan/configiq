@@ -500,7 +500,10 @@ def test_recommend_skips_pd_candidates_without_a_fabric(monkeypatch, manifest):
 
     assert result.search_summary["modes_searched"] == ["agg"]
     assert all(config["mode"] == "agg" for config in result.configs)
-    assert all("P/D candidates were not searched" in config["warnings"][0] for config in result.configs)
+    assert all(
+        any("P/D candidates were not searched" in warning for warning in config["warnings"])
+        for config in result.configs
+    )
 
 
 def test_disagg_estimate_builds_p_and_d_pools_and_uses_requested_fabric(monkeypatch, manifest):

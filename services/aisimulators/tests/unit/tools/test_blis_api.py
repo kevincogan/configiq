@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from tools.api_service import app as app_module
 from tools.api_service.app import app
+from tools.api_service.blis.manifest import SupportManifest
 
 client = TestClient(app)
 
@@ -289,8 +290,10 @@ def test_blis_recommend_normalizes_fractional_concurrency_like_aisimulate():
     assert run_blis.call_args.args[0].concurrency == 8
 
 
-def _manifest():
-    return SimpleNamespace(
+def _manifest() -> SupportManifest:
+    # A real manifest, not a SimpleNamespace: the catalog endpoints call
+    # supports_hardware()/resolve_* on it, and stubbing the type hides breakage.
+    return SupportManifest(
         models={
             "qwen3-32b": {
                 "origin": "aisimulate",
