@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections import Counter
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 
@@ -138,9 +139,23 @@ COREWEAVE_SYSTEMS = {
 }
 
 
-def parse_coreweave_prices(html: str, configurations: list[RentalOffer] | None = None) -> list[RentalOffer]:
+def parse_coreweave_prices(
+    html: str, configurations: list[RentalOffer] | None = None, *, complete_page: bool = False,
+) -> list[RentalOffer]:
     parser = CoreWeavePricingParser()
     parser.feed(html)
+    if complete_page:
+        # The public page currently publishes the same product rows in two
+        # regional tables. Validate that contract before replacing the provider
+        # snapshot. Do not hardcode prices or demand that delisted GPUs remain.
+        regions = {region for region, _ in parser.rows}
+        if (not html.rstrip().lower().endswith("</html>") or regions != {"north-america", "europe"}
+                or "w-pagination-next" in html or any(len(cells) not in {8, 9} for _, cells in parser.rows)):
+            raise ValueError("CoreWeave pricing page is incomplete or its table contract changed")
+        tables = [Counter((cells[0], cells[1], cells[2]) for region, cells in parser.rows if region == name)
+                  for name in ("north-america", "europe")]
+        if tables[0] != tables[1]:
+            raise ValueError("CoreWeave regional product tables differ; completeness requires review")
     offers = []
     now = datetime.now(UTC)
     for region, cells in parser.rows:
@@ -187,7 +202,7 @@ async def scrape_coreweave_offers(session: aiohttp.ClientSession) -> dict:
     async with session.get(COREWEAVE_URL, timeout=aiohttp.ClientTimeout(total=30)) as response:
         if response.status != 200:
             raise RuntimeError(f"CoreWeave pricing returned HTTP {response.status}")
-        offers = parse_coreweave_prices(await response.text(), load_curated_offers().rented)
+        offers = parse_coreweave_prices(await response.text(), load_curated_offers().rented, complete_page=True)
     return snapshot(offers, {"all": True})
 
 
@@ -240,7 +255,7 @@ def parse_gcp_a2_prices(skus: list[dict], regions: list[str]) -> list[RentalOffe
             if hourly > 0:
                 components[component].append((hourly, sku.get("skuId", ""), current.get("effectiveTime")))
         if any(len(matches) != 1 for matches in components.values()):
-            continue
+            raise ValueError(f"GCP region {region} has incomplete or ambiguous A2 Ultra component prices")
         rates = {key: matches[0][0] for key, matches in components.items()}
         for count in (1, 2, 4, 8):
             name = f"a2-ultragpu-{count}g"

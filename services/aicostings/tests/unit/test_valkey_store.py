@@ -49,9 +49,9 @@ class TestModels:
         assert store.get_models() is None
 
     def test_marks_scrape_time(self, store: ValkeyStore):
-        # Scrape time is recorded by _mark_scrape (called by the scrape jobs
+        # Scrape time is recorded by mark_scrape (called by the scrape jobs
         # after a successful set_*), not by the setters themselves.
-        store._mark_scrape("models")
+        store.mark_scrape("models")
         times = store.get_scrape_times()
         assert "models" in times
 
@@ -113,7 +113,7 @@ class TestCompleteOffers:
             "aws": {"offers": [{"id": "replacement"}]},
             "coreweave": {"offers": [{"id": "unaffected"}]},
         }
-        store._mark_scrape("offers.aws")
+        store.mark_scrape("offers.aws")
         store.client.expire("offers:rented:aws", 0)
         assert "aws" not in store.get_offer_snapshots()
         assert "offers.aws" in store.get_scrape_times()
@@ -129,7 +129,7 @@ class TestStaleness:
         assert store.is_stale("models", 3600) is True
 
     def test_not_stale_after_scrape(self, store: ValkeyStore):
-        store._mark_scrape("models")
+        store.mark_scrape("models")
         assert store.is_stale("models", 3600) is False
 
     def test_is_empty(self, store: ValkeyStore):

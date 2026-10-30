@@ -3,7 +3,7 @@
 """aicostings REST API.
 
 GPU and LLM pricing API for AI infrastructure cost modelling.
-See docs/api/openapi.yaml for the full spec.
+See /openapi.json for the full API specification.
 """
 
 from __future__ import annotations
@@ -113,7 +113,7 @@ async def job_scrape_models() -> None:
             store.set_models(catalog, source=source)
     for source, error in source_errors.items():
         if error is None:
-            store._mark_scrape(source)
+            store.mark_scrape(source)
         else:
             store.set_scrape_error(source, str(error))
     merged = catalogs.get("merged", [])
@@ -130,7 +130,7 @@ async def job_scrape_cloud_rates() -> None:
     def publish_offers(provider, records):
         try:
             store.set_offer_snapshot(provider, snapshot_from_rates(provider, records))
-            store._mark_scrape(f"offers.{provider}")
+            store.mark_scrape(f"offers.{provider}")
         except Exception as error:
             # Do not let a new view break the existing aggregate-price job.
             # Exception messages from authenticated clients can contain URLs
@@ -140,7 +140,7 @@ async def job_scrape_cloud_rates() -> None:
         async def refresh_coreweave():
             try:
                 store.set_offer_snapshot("coreweave", await scrape_coreweave_offers(session))
-                store._mark_scrape("offers.coreweave")
+                store.mark_scrape("offers.coreweave")
             except Exception as error:
                 store.set_scrape_error("offers.coreweave", f"Collection failed ({type(error).__name__}); check provider markup.")
 
@@ -161,7 +161,7 @@ async def job_scrape_cloud_rates() -> None:
     for provider, error in provider_errors.items():
         source_key = f"cloud.{provider}"
         if error is None:
-            store._mark_scrape(source_key)
+            store.mark_scrape(source_key)
         else:
             store.set_scrape_error(source_key, str(error))
             if provider in {"aws", "azure", "gcp"}:
@@ -180,7 +180,7 @@ async def job_load_hardware_costs() -> None:
     try:
         curated = load_curated_offers()
         store.set_curated_offers(curated.model_dump(mode="json"))
-        store._mark_scrape("offers.curated")
+        store.mark_scrape("offers.curated")
     except Exception as error:
         store.set_scrape_error("offers.curated", f"Catalogue validation failed ({type(error).__name__}).")
     for system_id, cost in costs.items():
@@ -192,7 +192,7 @@ async def job_load_hardware_costs() -> None:
     # record a freshness timestamp so /health reports the source (and flags it
     # stale if the 7-day reload ever stops running).
     if costs:
-        store._mark_scrape("hardware_costs")
+        store.mark_scrape("hardware_costs")
     else:
         store.set_scrape_error("hardware_costs", "no hardware cost seed data found")
     logger.info("Loaded hardware costs for %d systems", len(costs))

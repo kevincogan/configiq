@@ -129,7 +129,8 @@ def assemble_offers(curated: dict | None, snapshots: dict[str, dict], errors: di
             records = [RentalOffer.model_validate(record) for record in snapshot["offers"]]
             if any(record.provider != provider for record in records):
                 raise ValueError("Provider snapshot contains a different provider")
-            stale = (datetime.now(UTC) - collected_at).total_seconds() > 25 * 3600 or f"offers.{provider}" in errors
+            age = (datetime.now(UTC) - collected_at).total_seconds()
+            stale = age < 0 or age > 25 * 3600 or f"offers.{provider}" in errors
             scope = snapshot["scope"]
             result.rented = [offer for offer in result.rented if not (
                 offer.provider == provider

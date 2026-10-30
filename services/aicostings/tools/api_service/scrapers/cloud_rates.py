@@ -287,10 +287,12 @@ async def scrape_aws(session: aiohttp.ClientSession, mapping: dict[str, str]) ->
         return []
     region_urls = await _aws_region_file_urls(session)
     records: list[RateRecord] = []
+    partial = False
     for region in AWS_PRICING_REGIONS:
         url = region_urls.get(region)
         if not url:
             logger.warning("AWS: no offer file URL for region %s", region)
+            partial = True
             continue
         region_records = await _aws_scrape_region(session, region, url, want_types, mapping)
         records.extend(region_records)
@@ -307,6 +309,9 @@ async def scrape_aws(session: aiohttp.ClientSession, mapping: dict[str, str]) ->
             "have changed"
         )
     logger.info("AWS: %d rate records across %d region(s)", len(records), len(AWS_PRICING_REGIONS))
+    if partial:
+        for record in records:
+            record["collection_partial"] = True
     return records
 
 

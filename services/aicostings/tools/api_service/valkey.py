@@ -177,7 +177,7 @@ class ValkeyStore:
                 result[source] = json.loads(raw)
         return result
 
-    def _mark_scrape(self, source: str) -> None:
+    def mark_scrape(self, source: str) -> None:
         now = datetime.now(UTC).isoformat()
         self.client.set(_key_scrape_last(source), now)
         self.clear_scrape_error(source)

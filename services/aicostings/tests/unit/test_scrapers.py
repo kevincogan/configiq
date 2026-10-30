@@ -506,6 +506,20 @@ class TestAwsScrapeRegion:
         assert {key: records[0][key] for key in expected} == expected
         assert records[0]["instance_name"] == "p4d.24xlarge"
         assert records[0]["instance_hourly_cost"] == 32.7726
+        assert records[0]["currency"] == "USD"
+        assert records[0]["unit"] == "Hrs"
+
+    @pytest.mark.asyncio
+    async def test_missing_configured_region_marks_collection_partial(self, monkeypatch):
+        from tools.api_service.scrapers.offer_collectors import snapshot_from_rates
+
+        monkeypatch.setattr('tools.api_service.scrapers.cloud_rates.AWS_PRICING_REGIONS', ['us-east-1', 'us-west-2'])
+        monkeypatch.setattr('tools.api_service.scrapers.cloud_rates._aws_region_file_urls',
+                            AsyncMock(return_value={'us-east-1': 'http://x'}))
+        records = await scrape_aws(self._session_for(self._fixture_bytes()), {'p4d.24xlarge': 'a100_sxm'})
+        assert records and all(record['collection_partial'] for record in records)
+        with pytest.raises(ValueError, match='Incomplete provider'):
+            snapshot_from_rates('aws', records)
 
     @pytest.mark.asyncio
     async def test_scrape_aws_raises_when_no_records(self, monkeypatch):

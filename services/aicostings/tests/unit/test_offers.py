@@ -9,7 +9,12 @@ import pytest
 from pydantic import ValidationError
 
 from tools.api_service.offers import RentalOffer, assemble_offers, load_curated_offers
-from tools.api_service.scrapers.offer_collectors import parse_coreweave_prices, parse_gcp_a2_prices, snapshot_from_rates
+from tools.api_service.scrapers.offer_collectors import (
+    parse_coreweave_prices,
+    parse_gcp_a2_prices,
+    snapshot,
+    snapshot_from_rates,
+)
 
 
 def offer(**overrides):
@@ -29,6 +34,8 @@ def test_catalogue_preserves_full_servers_not_card_prices():
     assert server.purchase_price == 35000
     assert server.installation_cost == 2500
     assert server.price_basis == "complete_server"
+    h200 = next(record for record in data.purchased if record.id == "h200_sxm:server:8")
+    assert h200.purchase_price == 370000  # Complete server, not the legacy per-GPU card price.
     assert all(record.source.kind == "curated" and record.source.retrieved_at is None for record in data.purchased)
 
 
@@ -59,6 +66,12 @@ def test_failed_refresh_retains_last_good_price_but_marks_it_stale():
     assert data.sources["aws"].state == "stale"
     snapshot["collected_at"] = (datetime.now(UTC) - timedelta(hours=26)).isoformat()
     assert assemble_offers(None, {"aws": snapshot}, {}).rented[0].source.stale
+    snapshot["collected_at"] = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
+    assert assemble_offers(None, {"aws": snapshot}, {}).sources["aws"].state == "stale"
+    snapshot["collected_at"] = datetime.now(UTC).isoformat()
+    recovered = assemble_offers(None, {"aws": snapshot}, {})
+    assert recovered.sources["aws"].state == "fresh"
+    assert not recovered.rented[0].source.stale
 
 
 def test_no_automatic_snapshot_means_explicit_curated_or_unconfigured_not_fake_live():
@@ -107,6 +120,26 @@ def test_coreweave_fails_on_layout_or_eligibility_changes():
         parse_coreweave_prices(coreweave_row(name="NVIDIA L40"))  # not L40S
 
 
+def test_coreweave_complete_page_contract_rejects_truncation_but_allows_delisting():
+    def page(rows):
+        north = ''.join(coreweave_row(name) for name in rows)
+        return '<html>' + north + north.replace('NORTH AMERICA', 'EUROPE') + '</html>'
+
+    full = page(["NVIDIA HGX B200", "NVIDIA HGX H200"])
+    offers = parse_coreweave_prices(full, complete_page=True)
+    assert len(offers) == 12
+    for partial in [full.removesuffix('</html>'), '<html>' + coreweave_row() + '</html>',
+                    full.replace(coreweave_row("NVIDIA HGX H200").replace('NORTH AMERICA', 'EUROPE'), '')]:
+        with pytest.raises(ValueError):
+            parse_coreweave_prices(partial, complete_page=True)
+    # Legitimate removal from both full regional tables must not revive a seed.
+    removed = parse_coreweave_prices(page(["NVIDIA HGX B200"]), complete_page=True)
+    curated = {"rented": [record.model_dump(mode="json") for record in offers]}
+    result = assemble_offers(curated, {"coreweave": snapshot(removed, {"all": True})}, {})
+    assert result.sources["coreweave"].state == "fresh"
+    assert result.rented and all(record.system_id == 'b200_sxm' for record in result.rented)
+
+
 def gcp_sku(description, price, unit="h"):
     return {"skuId": description, "description": description, "serviceRegions": ["us-central1"],
             "category": {"usageType": "OnDemand"}, "pricingInfo": [{
@@ -120,7 +153,9 @@ def test_gcp_requires_all_machine_components_and_rejects_ambiguous_prices():
             gcp_sku("A2 Ultra Instance RAM", .01, "GiBy.h"), gcp_sku("Local SSD", .02, "GiBy.h")]
     offers = parse_gcp_a2_prices(skus, ["us-central1"])
     assert [record.gpu_count for record in offers] == [1, 2, 4, 8]
-    assert offers[0].hourly_cost == pytest.approx(5 + 12 * .1 + 170 * .01 + 375 * .02)
+    for record in offers:
+        assert record.instance_name == f'GCP a2-ultragpu-{record.gpu_count}g'
+        assert record.hourly_cost == pytest.approx(record.gpu_count * (5 + 12 * .1 + 170 * .01 + 375 * .02))
     for invalid in [skus[:-1], [*skus, skus[0]]]:
         with pytest.raises(ValueError):
             parse_gcp_a2_prices(invalid, ["us-central1"])
@@ -128,6 +163,64 @@ def test_gcp_requires_all_machine_components_and_rejects_ambiguous_prices():
     future_price["effectiveTime"] = "2100-01-01T00:00:00Z"
     skus[0]["pricingInfo"].append(future_price)
     assert parse_gcp_a2_prices(skus, ["us-central1"])[0].hourly_cost == offers[0].hourly_cost
+
+
+@pytest.mark.parametrize('invalid', ['currency', 'unit', 'region', 'tier'])
+def test_gcp_rejects_incomplete_regions_and_incompatible_components(invalid):
+    skus = [gcp_sku("NVIDIA A100 80GB GPU", 5), gcp_sku("A2 Ultra Instance Core", .1),
+            gcp_sku("A2 Ultra Instance RAM", .01, "GiBy.h"), gcp_sku("Local SSD", .02, "GiBy.h")]
+    expression = skus[0]['pricingInfo'][0]['pricingExpression']
+    if invalid == 'currency':
+        expression['tieredRates'][0]['unitPrice']['currencyCode'] = 'EUR'
+    elif invalid == 'unit':
+        expression['usageUnit'] = 'GiBy.h'
+    elif invalid == 'tier':
+        expression['tieredRates'].append(expression['tieredRates'][0])
+    regions = ['us-central1', 'europe-west4'] if invalid == 'region' else ['us-central1']
+    with pytest.raises(ValueError):
+        parse_gcp_a2_prices(skus, regions)
+
+
+def test_partial_collection_and_missing_topology_metadata_fail_closed(monkeypatch):
+    from tools.api_service.scrapers import offer_collectors
+
+    record = {"collection_partial": True}
+    with pytest.raises(ValueError, match='Incomplete provider'):
+        snapshot_from_rates('aws', [record])
+    monkeypatch.setattr(offer_collectors, 'load_curated_offers', MagicMock(side_effect=ValueError('Invalid metadata')))
+    with pytest.raises(ValueError, match='Invalid metadata'):
+        snapshot_from_rates('aws', [])
+
+
+@pytest.mark.asyncio
+async def test_collection_job_keeps_last_good_on_partial_projection_then_recovers(monkeypatch):
+    from tools.api_service import app as api
+
+    last_good = snapshot([offer()], {"all": True})
+    snapshots = {"aws": last_good}
+    store = MagicMock()
+    store.set_offer_snapshot.side_effect = snapshots.__setitem__
+    record = {"system_id": "l40s", "provider_region": "aws.us-east-1", "instance_name": "g6e.xlarge",
+              "gpus_per_instance": 1, "instance_hourly_cost": 3, "on_demand": 3,
+              "source_url": "https://example.com/aws.json", "currency": "USD", "unit": "Hrs",
+              "collection_partial": True}
+
+    async def collect(_session, publish_offers):
+        publish_offers("aws", [record])
+        return {}, {"aws": None}
+
+    monkeypatch.setattr(api, 'store', store)
+    monkeypatch.setattr(api, 'scrape_all_cloud_rates', collect)
+    monkeypatch.setattr(api, 'scrape_coreweave_offers', AsyncMock(side_effect=ValueError('Partial page')))
+    await api.job_scrape_cloud_rates()
+    assert snapshots['aws'] is last_good
+    store.set_scrape_error.assert_any_call('offers.aws', 'Offer validation failed (ValueError).')
+    # The legacy source health is independent of complete-offer publication.
+    assert not any(call.args == ('offers.aws',) for call in store.mark_scrape.call_args_list)
+    record.pop('collection_partial')
+    await api.job_scrape_cloud_rates()
+    assert snapshots['aws']['offers'][0]['hourly_cost'] == 3
+    store.mark_scrape.assert_any_call('offers.aws')
 
 
 @pytest.mark.asyncio

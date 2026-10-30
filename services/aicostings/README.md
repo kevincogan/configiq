@@ -93,7 +93,7 @@ against the live APIs; validate with a real key before trusting output.
 |---|---|---|
 | Azure | Retail Prices API | Implemented (no key) |
 | AWS | Price List bulk JSON (on-demand; spot deferred) | Implemented (no key) |
-| CoreWeave | Public HTML pricing page | Complete offers only; fails closed if the expected layout/eligibility terms change |
+| CoreWeave | Public HTML pricing page | Complete offers only; validates the reviewed two-region table layout and inference terms; changes outside these checks still require review |
 | Vast.ai | Public marketplace API (spot-style median) | Implemented (no key) |
 | RunPod | GraphQL API | Key-gated, parsing TODO |
 | Lambda Labs | Cloud API | Key-gated, parsing TODO |
@@ -121,7 +121,7 @@ these do not change `new_usd` into a server price.
 - Rentals identify an exact provider, region, SKU, GPU system/count, USD
   **whole-instance-hour** price, rate kind, eligibility and known deployment
   constraints. Never divide an 8-GPU instance price to create a rentable 1-GPU
-  shape. Spot and inference-platform-only rates are returned distinctly and
+  shape. Spot, Capacity Block and inference-platform-only rates are returned distinctly and
   excluded from Hybrid Savings' general rental selector.
 - Purchases identify a **complete server**, GPU count, purchase/installation
   costs and what the estimate includes. Unknown installation costs remain null
@@ -136,8 +136,14 @@ these do not change `new_usd` into a server price.
   versus 80 GB, or H100 NVL versus SXM).
 - CoreWeave prices refresh from the public page. GPU identity mappings and
   topology constraints still require review; they are not inferred from price.
+  Collection requires a complete document with matching regional product rows
+  and no unhandled pagination. A truncated or inconsistent page retains the
+  last-good snapshot as stale rather than publishing a partial replacement.
+  Simultaneous product removal from both tables is allowed; these checks cannot
+  detect every possible provider-side omission in an otherwise valid page.
 - GCP currently composes only A2 Ultra on-demand GPU, vCPU, RAM and bundled
-  Local SSD charges. Missing, ambiguous or tiered components fail closed.
+  Local SSD charges. Missing, ambiguous or tiered components in any configured
+  region fail the whole collection, retaining the last complete snapshot.
   Monthly SSD prices use 730 hours/month. No live-key validation was possible
   during development: validate against real catalogue responses before enabling
   this collector. Other GCP shapes remain clearly curated, not automatically
