@@ -40,7 +40,7 @@ services, typically behind nginx. See [RELEASE_PROCESS.md](./RELEASE_PROCESS.md)
 | App shell | `components/layout/AppShell.tsx` | PatternFly page, masthead, and sidebar |
 | Predict workflow | `app/predict/` | Explicit `/api/predict` performance requests and result display |
 | Recommend workflow | `app/recommend/` | GPU sizing requests, including streamed progress |
-| Simulator setting | `contexts/SettingsContext.tsx`, `app/settings/` | Persisted global simulator selection for Predict and Recommend |
+| Simulator setting | `contexts/SettingsContext.tsx`, `app/settings/` | Persisted global simulator selection for Predict, Recommend and Hybrid Savings |
 | KV cache calculator | `app/kv-cache/` | `/api/memory` requests and memory breakdown display |
 | Catalog hook | `lib/hooks/useCatalog.ts` | Same-origin GPU, model, and backend catalog |
 | Costings hook | `lib/hooks/useCostings.ts` | Same-origin pricing and health data |
@@ -82,10 +82,12 @@ GPU sizing formulas or call external service URLs directly from the browser.
 2. The catalog route fetches `/systems`, `/models`, `/backends`, and `/networks`
    from AISimulators and combines them into one browser response. The network
    list supplies fabrics for BLIS P/D predictions; AISimulate does not consume it.
-3. When costings are enabled, `useCostings` calls `/api/costings/models`,
+3. `useCostings` calls `/api/costings/models`,
    `/api/costings/systems`, and `/api/costings/health`. Hybrid Savings uses its
    models-only scope, omitting the legacy systems-pricing request. Caches are
-   isolated by pricing source and scope; empty/stale startup data retries after
+   isolated by pricing source and scope. Hybrid Savings and Sources are available
+   without the experimental toggle; Cluster Cost and Routing Economics remain
+   gated. Empty/stale startup data retries after
    one minute, while healthy data retains the usual one-hour cache lifetime.
 4. Those routes proxy the aicostings service; pricing data is not part of the
    AISimulators sizing response.
@@ -95,6 +97,15 @@ GPU sizing formulas or call external service URLs directly from the browser.
    results without rerunning simulation. Missing/incompatible feeds show an
    explicit warning, never a hidden local price fallback. Curated server and
    uncovered rental estimates remain centralised in the backend and labelled.
+   General rental selection excludes Spot, Capacity Blocks and inference-only
+   offers. Backend source status and transport refresh errors remain distinct;
+   degraded sources retry after one minute instead of the healthy one-hour TTL.
+   Manual rental choices use provider, region, SKU, topology and billing terms,
+   so changing a collector ID or price does not discard a still-valid choice.
+6. Hybrid Savings sends the Settings simulator and backend version with each
+   sizing request, narrows the catalogue using simulator capabilities, and
+   rejects results from a different simulator. Cost formulas remain client-side;
+   performance and GPU sizing remain service-owned.
 
 ## API route map
 

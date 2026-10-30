@@ -205,7 +205,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               isActive={false}
             />}
 
-            {costingsEnabled && <>
             <div style={groupLabelStyle}>COSTINGS</div>
 
             <NavItemWithIcon
@@ -214,6 +213,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               href="/hybrid-savings"
               isActive={pathname === "/hybrid-savings"}
             />
+            {costingsEnabled && <>
             <NavItemWithIcon
               icon={CubesIcon}
               label="Cluster cost"
@@ -236,14 +236,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               href="/settings"
               isActive={pathname === "/settings"}
             />
-            {costingsEnabled && (
               <NavItemWithIcon
                 icon={DatabaseIcon}
                 label="Sources"
                 href="/sources"
                 isActive={pathname === "/sources"}
               />
-            )}
           </NavList>
         </Nav>
 
