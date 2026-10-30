@@ -124,6 +124,11 @@ npm run lint       # ESLint
 npm run type-check # TypeScript check without build
 ```
 
+### Commits
+
+Every commit must carry a `Signed-off-by:` trailer matching the author. Use
+`git commit -s` (or `git commit --amend -s` to fix an existing commit).
+
 ## Typography & color (legibility rules)
 
 Goal: high-contrast, readable text on white console surfaces. No faint gray
