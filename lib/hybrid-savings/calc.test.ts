@@ -974,6 +974,11 @@ describe('independent hardware selections', () => {
     const refreshed = { ...expensive, clusterOutputTokensPerSecond: 120, cloudRatePerGpuHour: 5, purchasePricePerReplica: 30_000 }
     expect(infrastructureCandidateKey(refreshed, 'rented')).toBe(rentedKey)
     expect(infrastructureCandidateKey(refreshed, 'owned')).toBe(ownedKey)
+    expect(infrastructureCandidateKey({ ...refreshed, configurationId: 'collected-provider-id', cloudPriceSource: 'Live feed' }, 'rented')).toBe(rentedKey)
+    for (const changed of [{ cloudGpusPerInstance: 8 }, { cloudRateKind: 'capacity_block' as const },
+      { cloudInstanceName: 'different-sku' }, { cloudProviderRegion: 'another-region' }, { cloudInterconnect: 'NVLink' }]) {
+      expect(infrastructureCandidateKey({ ...refreshed, ...changed }, 'rented')).not.toBe(rentedKey)
+    }
     const result = calculateHybridComparison(workload, hostedPrice, [candidate, refreshed], assumptions, {
       rented: rentedKey, owned: ownedKey,
     })

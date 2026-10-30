@@ -37,6 +37,7 @@ export interface InfrastructureCandidate {
   cloudProviderRegion?: string | null
   cloudRateKind: 'on_demand' | 'spot' | 'capacity_block' | null
   cloudMaxInstancesPerReplica?: number | null
+  cloudInterconnect?: string | null
   cloudPriceSource?: string | null
   cloudPriceSourceUrl?: string | null
   cloudPriceSourceDate?: string | null
@@ -98,12 +99,13 @@ export type InfrastructurePath = 'rented' | 'owned'
 
 /** Keep provider, instance topology and billing terms distinct in manual selections. */
 export function infrastructureCandidateKey(candidate: InfrastructureCandidate, path: InfrastructurePath): string {
-  return JSON.stringify([path, candidate.systemId, candidate.configurationId ?? (
+  return JSON.stringify([path, candidate.systemId,
     path === 'rented'
       ? [candidate.cloudProvider, candidate.cloudProviderRegion, candidate.cloudInstanceName,
-        candidate.cloudGpusPerInstance, candidate.cloudRateKind, candidate.cloudMaxInstancesPerReplica]
-      : [candidate.purchaseGpusPerServer ?? candidate.gpusPerReplica, candidate.purchasePriceSource]
-  )])
+        candidate.cloudGpusPerInstance, candidate.cloudRateKind, candidate.cloudMaxInstancesPerReplica ?? null,
+        candidate.cloudInterconnect ?? null]
+      : candidate.configurationId ?? [candidate.purchaseGpusPerServer ?? candidate.gpusPerReplica, candidate.purchasePriceSource],
+  ])
 }
 
 export interface HybridComparison {

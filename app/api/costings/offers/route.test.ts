@@ -15,11 +15,13 @@ it.each([404, 500])('keeps %s failures isolated from legacy endpoints', async up
   vi.mocked(fetch).mockResolvedValue(new Response('private upstream error', { status: upstream }))
   const response = await GET()
   expect(response.status).toBe(upstream === 404 ? 404 : 502)
+  expect(response.headers.get('cache-control')).toBe('no-store')
   expect(await response.text()).not.toContain('private upstream error')
 })
 it('handles timeouts without exposing upstream details', async () => {
   vi.mocked(fetch).mockRejectedValue(Object.assign(new Error('secret URL'), { name: 'TimeoutError' }))
   const response = await GET()
   expect(response.status).toBe(504)
+  expect(response.headers.get('cache-control')).toBe('no-store')
   expect(await response.text()).not.toContain('secret URL')
 })

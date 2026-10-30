@@ -27,7 +27,7 @@ export function resolveRentedCloudOffers(
 ): RentedCloudOffer[] {
   // Apply eligibility before provider preference: a provider's conditional
   // rate must not hide another provider's usable offer.
-  let resolved = offers.filter(offer => offer.systemId === systemId && offer.rateKind !== 'spot' && offer.eligibility === 'standard')
+  let resolved = offers.filter(offer => offer.systemId === systemId && offer.rateKind === 'on_demand' && offer.eligibility === 'standard')
   if (preferredProviderRegion) {
     const exact = resolved.filter(offer => offer.providerRegion === preferredProviderRegion)
     const provider = resolved.filter(offer => offer.provider === providerId(preferredProviderRegion))

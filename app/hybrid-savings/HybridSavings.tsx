@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useCostAssumptions } from '@/contexts/CostAssumptionsContext'
 import {
   Alert,
+  AlertActionCloseButton,
   Button,
   Card,
   CardBody,
@@ -20,6 +21,7 @@ import {
 } from '@patternfly/react-core'
 import { ComboBox } from '@/components/ModelComboBox/ModelComboBox'
 import { InfoStrip, InfoStripAction } from '@/components/ui/InfoStrip'
+import { SimulatorBadge } from '@/components/ui/SimulatorBadge'
 import { buildModelItems, needsHfConfig } from '@/lib/model-options'
 import { fetchModelConfig } from '@/lib/huggingface/fetch-config'
 import { HybridCostCard } from './HybridCostCard'
@@ -128,6 +130,10 @@ function billingModeLabel(mode: CloudBillingMode): string {
   return 'Always on'
 }
 
+function instanceLabel(provider: string | null | undefined, sku: string | null | undefined): string {
+  return provider === 'aws' && sku && !sku.startsWith('EC2 ') ? `EC2 ${sku}` : sku ?? ''
+}
+
 function NumberField({
   id,
   label,
@@ -193,28 +199,47 @@ export default function HybridSavings() {
     defaultModel,
     testedModels,
     inferenceBackend,
-    costingsEnabled,
+    simulator,
+    backendVersion,
     preferredCloudProvider,
     pricingSource,
     hfToken,
   } = useSettings()
   const {
-    gpuOptions,
-    modelOptions,
+    gpuOptions: allGpuOptions,
+    modelOptions: allModelOptions,
+    simulatorSupport,
+    backendOptions,
     modelSpecs,
     isLoading: catalogLoading,
     error: catalogError,
   } = useCatalog()
-  const costings = useCostings(costingsEnabled, pricingSource, 'models')
-  const infrastructure = useInfrastructureOffers(costingsEnabled)
+  const support = simulatorSupport[simulator]
+  const modelOptions = support?.models ?? allModelOptions
+  const selectedBackend = (support?.backends ?? backendOptions).find(backend => backend.id === inferenceBackend)
+  const gpuOptions = React.useMemo(() => allGpuOptions.filter(gpu =>
+    (!support || support.systems.includes(gpu.systemId)) &&
+    (!backendVersion || (backendVersion === 'current' && selectedBackend?.defaultVersion === 'current'
+      ? !!selectedBackend.systems[gpu.systemId]?.length
+      : selectedBackend?.systems[gpu.systemId]?.includes(backendVersion)))),
+  [allGpuOptions, support, selectedBackend, backendVersion])
+  const backendUnavailable = !!support && !selectedBackend
+  const costings = useCostings(hydrated, pricingSource, 'models')
+  const infrastructure = useInfrastructureOffers(hydrated)
   const hostedSources = React.useMemo(
     () => Object.entries(costings.health?.sources ?? {})
       .filter(([source]) => pricingSource === 'merged' ? source.startsWith('models.') : source === `models.${pricingSource}`),
     [costings.health, pricingSource],
   )
   const staleCostingSources = hostedSources.filter(([, status]) => status.stale).map(([source]) => source)
+  const infrastructureStates = Object.values(infrastructure.sources)
   const costingInputsStale = costings.modelsStale || staleCostingSources.length > 0 || infrastructure.stale ||
+    infrastructureStates.some(source => source.state === 'stale') ||
     infrastructure.rented.some(offer => offer.stale) || infrastructure.purchased.some(offer => offer.stale)
+  const freshnessSummary = costingInputsStale ? 'Stale · check Sources'
+    : infrastructure.error || infrastructureStates.some(source => source.state === 'unavailable') ? 'Some sources unavailable · check Sources'
+      : infrastructureStates.some(source => source.state === 'unconfigured') ? 'Some collectors unconfigured · curated estimates may apply'
+        : infrastructureStates.length === 0 ? 'Infrastructure source status unavailable' : 'No stale feed reported'
 
   const [model, setModel] = React.useState('')
   const [profileId, setProfileId] = React.useState(DEFAULT_WORKLOAD.key)
@@ -242,7 +267,7 @@ export default function HybridSavings() {
   const [workloadAdvancedOpen, setWorkloadAdvancedOpen] = React.useState(false)
   const [chartOpen, setChartOpen] = React.useState(false)
   const [calculationDetailsOpen, setCalculationDetailsOpen] = React.useState(false)
-  const { candidates, isSizing, progress, sizingError, failedSystems, lastSizingSignature, runSizing: sizeConfigurations, cancel } = useHybridSizing(infrastructure, preferredCloudProvider)
+  const { candidates, resultSimulator, isSizing, progress, sizingError, failedSystems, lastSizingSignature, runSizing: sizeConfigurations, cancel } = useHybridSizing(infrastructure, preferredCloudProvider)
   const [modelConfig, setModelConfig] = React.useState<{ model: string; config: Record<string, unknown> } | null>(null)
   const [configLoading, setConfigLoading] = React.useState(false)
   const [configError, setConfigError] = React.useState<string | null>(null)
@@ -335,6 +360,8 @@ export default function HybridSavings() {
     targetConcurrency,
     prefixTokens,
     inferenceBackend,
+    simulator,
+    backendVersion,
   }), [
     model,
     monthlyInputTokens,
@@ -348,6 +375,8 @@ export default function HybridSavings() {
     targetConcurrency,
     prefixTokens,
     inferenceBackend,
+    simulator,
+    backendVersion,
   ])
   const isStale = lastSizingSignature !== null && lastSizingSignature !== sizingSignature
   const comparison = React.useMemo(() => {
@@ -358,16 +387,21 @@ export default function HybridSavings() {
   const rentedOptions = React.useMemo(() => infrastructureOptionsAtVolume('rented', workload, candidates, assumptions, facts.monthlyTokens), [workload, candidates, assumptions, facts.monthlyTokens])
   const ownedOptions = React.useMemo(() => infrastructureOptionsAtVolume('owned', workload, candidates, assumptions, facts.monthlyTokens), [workload, candidates, assumptions, facts.monthlyTokens])
   React.useEffect(() => {
+    if (lastSizingSignature !== null && !sizingError) setSelectionNotice(null)
+  }, [lastSizingSignature, sizingError])
+  React.useEffect(() => {
     // Do not erase a valid manual choice while a new sizing run is in progress.
     if (isSizing || isStale || infrastructure.isLoading || lastSizingSignature === null) return
+    const reset: string[] = []
     if (rentedSelection && !rentedOptions.some(option => option.candidate && infrastructureCandidateKey(option.candidate, 'rented') === rentedSelection)) {
       setRentedSelection(null)
-      setSelectionNotice('The selected rented offer is no longer eligible. Returned to automatic selection.')
+      reset.push('rented offer')
     }
     if (ownedSelection && !ownedOptions.some(option => option.candidate && infrastructureCandidateKey(option.candidate, 'owned') === ownedSelection)) {
       setOwnedSelection(null)
-      setSelectionNotice('The selected server configuration is no longer eligible. Returned to automatic selection.')
+      reset.push('server configuration')
     }
+    if (reset.length) setSelectionNotice(`The selected ${reset.join(' and ')} ${reset.length === 1 ? 'is' : 'are'} no longer eligible. Returned to automatic selection.`)
   }, [isSizing, isStale, infrastructure.isLoading, lastSizingSignature, rentedSelection, ownedSelection, rentedOptions, ownedOptions])
 
   const rentedReadyGpus = React.useMemo(() => gpuOptions.filter(gpu => (
@@ -397,7 +431,7 @@ export default function HybridSavings() {
   }
 
   const runSizing = () => sizeConfigurations({
-    signature: sizingSignature, model, backend: inferenceBackend,
+    signature: sizingSignature, model, backend: inferenceBackend, simulator, backendVersion,
     averageInputTokens, averageOutputTokens, targetTtftMs, targetTpotMs,
     targetConcurrency, prefixTokens,
     gpuOptions,
@@ -420,29 +454,12 @@ export default function HybridSavings() {
     !Number.isInteger(prefixTokens) ||
     prefixTokens > averageInputTokens
 
-  const canCalculate = assumptionsHydrated && !invalidWorkload && !!hostedPrice && !!model && gpuOptions.length > 0 &&
+  const canCalculate = assumptionsHydrated && !backendUnavailable && !invalidWorkload && !!hostedPrice && !!model && gpuOptions.length > 0 &&
     !catalogLoading && !costings.isLoading && !isSizing && !configLoading &&
     (!needsHfConfig(model, modelOptions) || modelConfig?.model === model)
   const hostedOption = comparison?.options.find(option => option.key === 'hosted')
   const rentedOption = comparison?.options.find(option => option.key === 'rented')
   const ownedOption = comparison?.options.find(option => option.key === 'owned')
-
-  if (hydrated && !costingsEnabled) {
-    return (
-      <div className={styles.page}>
-        <header className={styles.header}>
-          <div>
-            <h1 className={styles.pageTitle}>Hybrid savings</h1>
-            <p className={styles.subtitle}>Compare hosted API, rented GPU and purchased hardware costs for one workload.</p>
-          </div>
-        </header>
-        <Alert title="Enable experimental costings" variant="info" isInline>
-          Hybrid Savings uses the shared costing catalogue. Enable experimental costings in Settings, then return here.
-          <div className={styles.alertAction}><Button component="a" href="/settings" variant="link" isInline>Open Settings</Button></div>
-        </Alert>
-      </div>
-    )
-  }
 
   return (
     <div className={styles.page}>
@@ -464,7 +481,11 @@ export default function HybridSavings() {
         {infrastructure.error ?? `${infrastructure.rejectedRecords} incomplete or duplicate pricing records were excluded.`}
         {infrastructure.stale && ' Showing the last successfully loaded snapshot; prices may be stale.'}
       </Alert>}
-      {selectionNotice && <Alert title="Hardware selection updated" variant="info" isInline>{selectionNotice}</Alert>}
+      {selectionNotice && <Alert title="Hardware selection updated" variant="info" isInline
+        actionClose={<AlertActionCloseButton onClose={() => setSelectionNotice(null)} />}>{selectionNotice}</Alert>}
+      {backendUnavailable && <Alert title="Selected backend unavailable" variant="warning" isInline>
+        This simulator does not support the backend selected in Settings. Choose a supported backend there to calculate.
+      </Alert>}
 
       <Form onSubmit={event => { event.preventDefault(); if (canCalculate) void runSizing() }}>
         <Card className={styles.inputCard}>
@@ -568,6 +589,7 @@ export default function HybridSavings() {
         <section className={styles.resultsSection} aria-label="Cost comparison">
           <div className={styles.sectionHeading}>
             <h2>Cost comparison</h2>
+            {resultSimulator && <SimulatorBadge simulator={resultSimulator} />}
             <FormGroup label="Cost view" fieldId="hybrid-cost-view" className={styles.lensControl}>
               <FormSelect id="hybrid-cost-view" value={assumptions.costLens} onChange={(_event, value) => setCostLens(value as CostLens)}>
                 <FormSelectOption value="fully-loaded" label="Full TCO" />
@@ -602,10 +624,10 @@ export default function HybridSavings() {
                   { value: '', label: `Automatic · ${rentedOptions[0]?.candidate?.cloudGpusPerInstance ?? 1} × ${rentedOptions[0]?.candidate?.label ?? ''}`, group: '', description: 'Cheapest eligible configuration' },
                   ...rentedOptions.flatMap(option => option.candidate ? [{ value: infrastructureCandidateKey(option.candidate, 'rented'),
                     label: `${option.candidate.cloudGpusPerInstance ?? 1} × ${option.candidate.label}`, group: '',
-                    description: `${option.candidate.cloudProvider?.toUpperCase()} · ${option.candidate.cloudInstanceName} · ${option.candidate.cloudProviderRegion} · ${currencyFormatter.format(option.monthlyCost)}/mo` }] : []),
+                    description: `${option.candidate.cloudProvider?.toUpperCase()} · ${instanceLabel(option.candidate.cloudProvider, option.candidate.cloudInstanceName)} · ${option.candidate.cloudProviderRegion} · ${currencyFormatter.format(option.monthlyCost)}/mo` }] : []),
                 ]} />}>
               <dl className={styles.metricList}>
-                <div><dt>Provider / instance</dt><dd>{rentedOption?.candidate?.cloudProvider?.toUpperCase()} · {rentedOption?.candidate?.cloudInstanceName}</dd></div>
+                <div><dt>Provider / instance</dt><dd>{rentedOption?.candidate?.cloudProvider?.toUpperCase()} · {instanceLabel(rentedOption?.candidate?.cloudProvider, rentedOption?.candidate?.cloudInstanceName)}</dd></div>
                 <div><dt>Availability</dt><dd>Rented ready</dd></div>
               </dl>
             </HybridCostCard>
@@ -621,7 +643,7 @@ export default function HybridSavings() {
                 ]} />}>
               <dl className={styles.metricList}>
                 <div><dt>System</dt><dd>{ownedOption?.candidate?.label}</dd></div>
-                <div><dt>Availability</dt><dd>Purchase ready · indicative price</dd></div>
+                <div><dt>Availability</dt><dd>Purchase ready{ownedOption?.candidate?.purchasePriceIndicative && ' · indicative price'}</dd></div>
               </dl>
             </HybridCostCard>
           </div>
@@ -663,6 +685,7 @@ export default function HybridSavings() {
               <h4 id="hybrid-sizing-details-heading">Sizing and capacity</h4>
               <dl className={styles.calculationList}>
                 <div><dt>Backend</dt><dd>{inferenceBackend}</dd></div>
+                <div><dt>Simulator</dt><dd>{resultSimulator && !isStale ? <SimulatorBadge simulator={resultSimulator} /> : 'Not yet calculated for current settings'}</dd></div>
                 <div><dt>Capacity reference</dt><dd>{formatter.format(targetConcurrency)} concurrent {targetConcurrency === 1 ? 'request' : 'requests'}</dd></div>
                 <div><dt>Response targets</dt><dd>{formatter.format(targetTtftMs)} ms TTFT · {formatter.format(targetTpotMs)} ms TPOT</dd></div>
                 <div><dt>Peak demand</dt><dd>{preciseRate(facts.peakRequestsPerSecond)} requests/s · {formatter.format(peakToAverage)}× average</dd></div>
@@ -683,7 +706,7 @@ export default function HybridSavings() {
             <section className={styles.calculationGroup} aria-labelledby="hybrid-pricing-details-heading">
               <h4 id="hybrid-pricing-details-heading">Prices and freshness</h4>
               <dl className={styles.calculationList}>
-                <div><dt>Pricing freshness</dt><dd>{costingInputsStale ? 'Stale · check Sources' : 'No stale feed reported'}{!costings.health && ' · source health unavailable'}</dd></div>
+                <div><dt>Pricing freshness</dt><dd>{freshnessSummary}{!costings.health && ' · source health unavailable'}</dd></div>
                 <div><dt>Hosted prices</dt><dd>Live aicostings feed · {pricingSource}</dd></div>
               {hostedModel && <>
                   <div><dt>Selected API model</dt><dd>{hostedModel.id}</dd></div>
@@ -693,7 +716,7 @@ export default function HybridSavings() {
                 </>}
                 <div><dt>Hosted feed updated</dt><dd>{collectionDate(costings.modelsUpdatedAt)}</dd></div>
                 <div><dt>Infrastructure prices</dt><dd>Complete-offers API · {infrastructure.rented.length} rental offers · {infrastructure.purchased.length} server configurations</dd></div>
-                <div><dt>Restricted rental rates</dt><dd>{infrastructure.rented.filter(offer => offer.eligibility !== 'standard').length} inference-platform-only offers excluded from general rental selection</dd></div>
+                <div><dt>Excluded rental rates</dt><dd>{infrastructure.rented.filter(offer => offer.eligibility !== 'standard' || offer.rateKind !== 'on_demand').length} Spot, Capacity Block or inference-platform-only offers excluded from general rental selection</dd></div>
                 {Object.entries(infrastructure.sources).map(([source, status]) => <div key={source}>
                   <dt>{source} collection</dt><dd>{status.state}{status.message && ` · ${status.message}`}</dd>
                 </div>)}
@@ -706,7 +729,7 @@ export default function HybridSavings() {
               <Link className={styles.sourceDetailsLink} href="/sources">View source collection times</Link>
             </section>
             </div>
-            <p className={styles.calculationNote}>Freshness describes collection, not a price’s effective date. Automatically collected prices and curated estimates are identified on each flip card. Catalogue prices are not commercial quotes.</p>
+            <p className={styles.calculationNote}>Planning estimates, not production guarantees. Validate the selected workload and commercial terms. Freshness describes collection, not a price’s effective date; each flip card identifies collected prices or curated estimates.</p>
           </section>
         </ExpandableSection>
       </CardBody></Card>

@@ -12,12 +12,12 @@ export async function GET() {
     if (!response.ok) {
       const status = response.status === 404 ? 404 : 502
       recordErrorCode('/api/costings/offers', 'OFFERS_ERROR', status)
-      return NextResponse.json({ error: { message: 'Complete-offers pricing unavailable.' } }, { status })
+      return NextResponse.json({ error: { message: 'Complete-offers pricing unavailable.' } }, { status, headers: { 'Cache-Control': 'no-store' } })
     }
     return NextResponse.json(await response.json(), { headers: { 'Cache-Control': 'no-store' } })
   } catch (error: unknown) {
     const status = error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name) ? 504 : 502
     recordErrorCode('/api/costings/offers', 'OFFERS_UNAVAILABLE', status)
-    return NextResponse.json({ error: { message: 'Infrastructure pricing service unavailable.' } }, { status })
+    return NextResponse.json({ error: { message: 'Infrastructure pricing service unavailable.' } }, { status, headers: { 'Cache-Control': 'no-store' } })
   }
 }

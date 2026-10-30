@@ -8,6 +8,7 @@ import type { InfrastructureCandidate } from '@/lib/hybrid-savings/calc'
 import { resolveRentedCloudOffers, type RentedCloudOffer } from '@/lib/hybrid-savings/cloud-offer-catalog'
 import { resolveCompatibleServerPurchaseConfigurations, type ServerPurchaseConfiguration } from '@/lib/hybrid-savings/purchase-catalog'
 import type { InfrastructureOffers } from '@/lib/api/infrastructure-offers'
+import type { Simulator } from '@/contexts/SettingsContext'
 
 function candidateFromResult(
   result: RecommendResult,
@@ -32,6 +33,7 @@ function candidateFromResult(
     cloudProviderRegion: cloudOffer?.providerRegion ?? null,
     cloudRateKind: cloudOffer?.rateKind ?? null,
     cloudMaxInstancesPerReplica: cloudOffer?.maxInstancesPerReplica ?? null,
+    cloudInterconnect: cloudOffer?.interconnect ?? null,
     cloudPriceSource: cloudOffer?.sourceLabel ?? null,
     cloudPriceSourceUrl: cloudOffer?.sourceUrl ?? null,
     cloudPriceSourceDate: cloudOffer?.sourceDate ?? null,
@@ -56,6 +58,8 @@ interface SizingInput {
   signature: string
   model: string
   backend: string
+  simulator: Simulator
+  backendVersion: string
   averageInputTokens: number
   averageOutputTokens: number
   targetTtftMs: number
@@ -125,6 +129,8 @@ export function useHybridSizing(offers: InfrastructureOffers, preferredCloudProv
               model_path: input.model,
               system: gpu.systemId,
               backend: input.backend,
+              simulator: input.simulator,
+              ...(input.backendVersion ? { backend_version: input.backendVersion } : {}),
               isl: Math.max(Math.round(input.averageInputTokens), 1),
               osl: Math.max(Math.round(input.averageOutputTokens), 1),
               ttft: Math.max(input.targetTtftMs, 1),
@@ -138,7 +144,7 @@ export function useHybridSizing(offers: InfrastructureOffers, preferredCloudProv
           })
           const data = await readRecommendStream(response)
           if (!current()) return
-          if (data.status !== 'completed') {
+          if (data.status !== 'completed' || data.simulator !== input.simulator) {
             failures += 1
             continue
           }
@@ -163,5 +169,6 @@ export function useHybridSizing(offers: InfrastructureOffers, preferredCloudProv
     }
   }
 
-  return { candidates, isSizing, progress, sizingError, failedSystems, lastSizingSignature, runSizing, cancel }
+  const resultSimulator = sized[0]?.result.simulator ?? null
+  return { candidates, resultSimulator, isSizing, progress, sizingError, failedSystems, lastSizingSignature, runSizing, cancel }
 }

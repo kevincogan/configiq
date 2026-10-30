@@ -53,7 +53,7 @@ export function parseInfrastructureOffers(raw: unknown): InfrastructureOffers {
     ids.add(offer.id)
     return [{
       id: offer.id, systemId: offer.system_id, provider: offer.provider, providerRegion: offer.provider_region,
-      instanceName: offer.provider === 'aws' && !offer.instance_name.startsWith('EC2 ') ? `EC2 ${offer.instance_name}` : offer.instance_name,
+      instanceName: offer.instance_name,
       gpuCount: offer.gpu_count, hourlyCost: offer.hourly_cost,
       rateKind: offer.rate_kind, eligibility: offer.eligibility, maxInstancesPerReplica: offer.max_instances_per_replica,
       interconnect: offer.interconnect, sourceLabel: offer.source.label, sourceUrl: offer.source.url,

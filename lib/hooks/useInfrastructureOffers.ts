@@ -33,9 +33,9 @@ export function useInfrastructureOffers(enabled: boolean): OffersState {
     let active = true
     let lastAttempt = 0
     const refresh = () => {
-      // Pick up a first successful collection promptly after service startup,
-      // then use the normal pricing TTL once all configured sources are ready.
-      const ttl = cached && Object.values(cached.sources).some(source => source.state === 'unavailable')
+      // Retry degraded or newly configured sources promptly; healthy feeds keep
+      // the normal TTL. Backend source status is separate from transport errors.
+      const ttl = cached && Object.values(cached.sources).some(source => ['stale', 'unavailable', 'unconfigured'].includes(source.state))
         ? 60_000 : CLIENT_CACHE_TTL_MS.costings
       if (Date.now() - cachedAt < ttl && cached) {
         setState({ ...cached, isLoading: false, error: null, stale: false })
@@ -47,7 +47,7 @@ export function useInfrastructureOffers(enabled: boolean): OffersState {
       void fetchOnce().then(data => {
         if (active) setState({ ...data, isLoading: false, error: null, stale: false })
       }).catch((error: unknown) => {
-        if (active) setState(previous => ({ ...previous, isLoading: false, stale: cached !== null,
+        if (active) setState(previous => ({ ...(cached ?? previous), isLoading: false, stale: cached !== null,
           error: error instanceof Error ? error.message : 'Infrastructure pricing unavailable.' }))
       })
     }

@@ -14,15 +14,21 @@ describe('API-supplied rental eligibility', () => {
     expect(offers.find(offer => offer.id === 'aws-g6e-xlarge')?.hourlyCost).toBe(1.861)
   })
   it('honors exact provider regions, then provider, without inventing missing offers', () => {
-    expect(resolveRentedCloudOffers(TEST_OFFERS.rented, 'l40s', 'aws.us-east-1').every(offer => offer.provider === 'aws')).toBe(true)
-    expect(resolveRentedCloudOffers(TEST_OFFERS.rented, 'l40s', 'coreweave.other').every(offer => offer.provider === 'coreweave')).toBe(true)
+    for (const [preference, provider] of [['aws.us-east-1', 'aws'], ['coreweave.other', 'coreweave']]) {
+      const offers = resolveRentedCloudOffers(TEST_OFFERS.rented, 'l40s', preference)
+      expect(offers.length).toBeGreaterThan(0)
+      expect(offers.every(offer => offer.provider === provider)).toBe(true)
+    }
     expect(resolveRentedCloudOffers([], 'l40s', 'aws.us-east-1')).toEqual([])
   })
-  it('does not silently rank spot or inference-platform-only prices as general rentals', () => {
+  it('does not silently rank spot, committed blocks or inference-only prices as general rentals', () => {
     expect(resolveRentedCloudOffers(TEST_OFFERS.rented, 'l40s').some(offer => offer.id === 'restricted')).toBe(false)
     expect(hasRentedCloudOffer(TEST_OFFERS.rented, 'b300_sxm')).toBe(false)
     expect(resolveRentedCloudOffers(TEST_OFFERS.rented, 'gb300')).toEqual([])
     const restrictedProvider = [rentalOffer({ provider: 'restricted', providerRegion: 'restricted.region', eligibility: 'inference_platform' }), rentalOffer()]
     expect(resolveRentedCloudOffers(restrictedProvider, 'l40s', 'restricted.region')).toEqual([restrictedProvider[1]])
+    const conditional = [rentalOffer({ provider: 'restricted', providerRegion: 'restricted.region', rateKind: 'capacity_block' }), rentalOffer()]
+    expect(resolveRentedCloudOffers(conditional, 'l40s', 'restricted.region')).toEqual([conditional[1]])
+    expect(hasRentedCloudOffer(conditional.slice(0, 1), 'l40s')).toBe(false)
   })
 })

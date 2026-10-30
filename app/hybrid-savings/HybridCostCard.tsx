@@ -102,6 +102,9 @@ export function HybridCostCard({
               {hostedOfferId && <div><dt>Offer / checkpoint</dt><dd>{hostedOfferId}</dd></div>}
               {candidate ? <>
                 <div><dt>GPUs</dt><dd>{option.gpuCount} required · {option.billedGpuCount} {option.key === 'rented' ? 'rented' : 'purchased'}</dd></div>
+                {option.key === 'rented' && <div><dt>Billing basis</dt><dd>{candidate.cloudRateKind === 'capacity_block'
+                  ? 'Capacity block · committed reservation' : candidate.cloudRateKind === 'spot'
+                    ? 'Spot · interruptible' : 'On-demand · whole instance-hour'}</dd></div>}
                 <div><dt>{option.key === 'rented' ? 'Instance rate' : 'Server price'}</dt><dd>{option.key === 'rented'
                   ? (candidate.cloudHourlyCostPerInstance == null ? 'Not supplied' : `${rate.format(candidate.cloudHourlyCostPerInstance)} / hour`)
                   : `${money.format(candidate.purchasePricePerReplica ?? 0)}${candidate.purchasePriceIndicative ? ' · indicative' : ''}`}</dd></div>

@@ -34,7 +34,7 @@ const models = ['first', 'second', 'third', 'fourth'].map((provider, index) => (
   context_window: null, updated_at: null,
 }))
 const sizing = {
-  status: 'completed', recommendation: { gpusPerReplica: 1, replicasNeeded: 1 },
+  status: 'completed', simulator: 'aisimulate', recommendation: { gpusPerReplica: 1, replicasNeeded: 1 },
   throughput: { tokensPerSecond: 1000 }, performance: { ttftLatencyMs: 100, tpotMs: 20 },
 } as RecommendResponse
 beforeEach(async () => {
@@ -211,6 +211,80 @@ describe('Hybrid page composition', () => {
     expect(host.querySelector('#hybrid-owned-configuration')).toBeNull()
   })
 
+  it('preserves a rental choice across curated-to-collected ID changes and refreshes purchase prices without sizing', async () => {
+    await render(); await click('Calculate'); await click('Cost vs workload (break-even analysis)')
+    await chooseComboOption('hybrid-rented-configuration', 'EC2 g6e.xlarge')
+    const choice = host.querySelector<HTMLInputElement>('#hybrid-rented-configuration')!.value
+    const chart = host.querySelector('[data-testid="chart"]')!.textContent
+    const costs = [...host.querySelectorAll('[class*="costValue"]')].map(element => element.textContent)
+    const calls = vi.mocked(readRecommendStream).mock.calls.length
+    vi.mocked(useInfrastructureOffers).mockReturnValue({ ...TEST_OFFERS, isLoading: false, error: null, stale: false,
+      rented: TEST_OFFERS.rented.map(offer => ({ ...offer, id: 'collected:' + offer.id, collectionKind: 'automated' as const })),
+      purchased: TEST_OFFERS.purchased.map(offer => ({ ...offer, purchasePrice: offer.purchasePrice * 2, indicative: false })),
+    })
+    await render()
+    expect(host.querySelector<HTMLInputElement>('#hybrid-rented-configuration')!.value).toBe(choice)
+    expect(host.textContent).not.toContain('no longer eligible')
+    expect([...host.querySelectorAll('[class*="costValue"]')].map(element => element.textContent)[2]).not.toBe(costs[2])
+    expect(host.querySelector('[data-testid="chart"]')!.textContent).not.toBe(chart)
+    expect(host.textContent).not.toContain('Purchase ready · indicative price')
+    expect(vi.mocked(readRecommendStream).mock.calls.length).toBe(calls)
+  })
+
+  it('combines removed hardware notices, lets the user dismiss them and clears them after recalculation', async () => {
+    await render(); await click('Calculate')
+    await chooseComboOption('hybrid-rented-configuration', 'EC2 g6e.xlarge')
+    await chooseComboOption('hybrid-owned-configuration', 1)
+    vi.mocked(useInfrastructureOffers).mockReturnValue({ ...TEST_OFFERS, isLoading: false, error: null, stale: false,
+      rented: TEST_OFFERS.rented.filter(offer => offer.id !== 'aws-g6e-xlarge'),
+      purchased: TEST_OFFERS.purchased.slice(1),
+    })
+    await render()
+    expect(host.textContent).toContain('selected rented offer and server configuration are no longer eligible')
+    const close = host.querySelector<HTMLButtonElement>('button[aria-label="Close Hardware selection updated alert"]')
+      ?? [...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.getAttribute('aria-label')?.includes('Close'))!
+    expect(close).toBeTruthy()
+    await act(async () => close.click())
+    expect(host.textContent).not.toContain('no longer eligible')
+    await click('Calculate')
+    expect(host.textContent).not.toContain('no longer eligible')
+  })
+
+  it.each([
+    ['stale', 'Stale · check Sources'], ['unavailable', 'Some sources unavailable'],
+    ['unconfigured', 'Some collectors unconfigured'],
+  ] as const)('includes %s backend source state even when no individual offer is stale', async (state, message) => {
+    vi.mocked(useInfrastructureOffers).mockReturnValue({ ...TEST_OFFERS, isLoading: false, error: null, stale: false,
+      sources: { aws: { state, last_success: null, message: null } } })
+    await render(); await click('Data and assumptions')
+    expect(host.textContent).toContain(message)
+    expect(host.textContent).not.toContain('Pricing freshnessNo stale feed reported')
+  })
+
+  it('uses the selected simulator capability catalog and version without substituting defaults', async () => {
+    const catalog = vi.mocked(useCatalog)()
+    vi.mocked(useCatalog).mockReturnValue({ ...catalog, simulatorSupport: { blis: {
+      version: null, systems: ['l40s'], models: ['Qwen/Qwen3-8B'], backends: [{
+        id: 'vllm', aisimulateId: 'vllm', versions: ['0.11.0'], defaultVersion: '0.11.0',
+        systems: { l40s: ['0.11.0'] }, systemDefaults: {}, versionSupport: {},
+        memoryFraction: null, memoryFractionKind: 'of_free', runtimeField: null, disaggregationRequiresFabric: true,
+      }],
+    } } })
+    vi.mocked(useSettings).mockReturnValue({ ...vi.mocked(useSettings)(), simulator: 'blis', backendVersion: '0.11.0' })
+    vi.mocked(readRecommendStream).mockResolvedValue({ ...sizing, simulator: 'blis' } as RecommendResponse)
+    await render(); await click('Calculate')
+    expect(JSON.parse(vi.mocked(fetch).mock.calls[0][1]!.body as string)).toMatchObject({ simulator: 'blis', backend_version: '0.11.0' })
+    expect(host.querySelector('[aria-label="Cost comparison"]')!.textContent).toContain('BLIS')
+    vi.mocked(useSettings).mockReturnValue({ ...vi.mocked(useSettings)(), simulator: 'aisimulate', backendVersion: '' })
+    await render()
+    expect(host.textContent).toContain('Inputs changed')
+    expect(host.querySelector('[aria-label="Cost comparison"]')).toBeNull()
+    vi.mocked(useSettings).mockReturnValue({ ...vi.mocked(useSettings)(), simulator: 'blis', inferenceBackend: 'tensorrt-llm' })
+    await render()
+    expect(host.textContent).toContain('Selected backend unavailable')
+    expect([...host.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === 'Calculate')!.disabled).toBe(true)
+  })
+
   it('explains a removed offer and keeps other comparison paths working', async () => {
     await render(); await click('Calculate')
     await chooseComboOption('hybrid-rented-configuration', 'EC2 g6e.xlarge')
@@ -222,6 +296,8 @@ describe('Hybrid page composition', () => {
     expect(host.querySelector<HTMLInputElement>('#hybrid-rented-configuration')!.value).toContain('Automatic')
     expect(host.querySelector('#hybrid-owned-configuration')).not.toBeNull()
     expect(vi.mocked(readRecommendStream).mock.calls.length).toBe(calls)
+    await click('Calculate')
+    expect(host.textContent).not.toContain('no longer eligible')
   })
 
   it('keeps the default API model label linked to the model selected above', async () => {
@@ -358,7 +434,7 @@ describe('Hybrid page composition', () => {
 
   it('keeps the simplified page free of removed notices while retaining controls, details and chart', async () => {
     await render()
-    expect(host.textContent).not.toContain('Planning estimate')
+    expect(host.querySelector('header')!.textContent).not.toContain('Planning estimate')
     expect(host.querySelector('[aria-label="Planning guidance"]')).toBeNull()
     expect(host.textContent).not.toContain('AISimulators sizing is estimated')
     expect(host.textContent).toContain('Data and assumptions')
@@ -451,7 +527,7 @@ describe('Hybrid page composition', () => {
     }
     expect(sections[2].textContent).toContain('1 concurrent request')
     expect(sections[2].textContent).toContain('2 models · 1 GPU systems')
-    expect(sections[2].textContent).toContain('not commercial quotes')
+    expect(sections[2].textContent).toContain('Validate the selected workload and commercial terms')
     expect(sections[1].textContent).toContain('Planning allowance from Sources; not a provider charge.')
     expect(sections[1].textContent).not.toContain('Complete server price')
     expect(host.querySelectorAll('#hybrid-calculation-details button, #hybrid-calculation-details summary')).toHaveLength(0)
@@ -768,11 +844,15 @@ describe('Hybrid page composition', () => {
     expect(host.querySelector('#hybrid-owned-configuration')).toBeNull()
   })
 
-  it('handles disabled costings without rendering an active calculator', async () => {
+  it('keeps Hybrid available without enabling other experimental costings', async () => {
     vi.mocked(useSettings).mockReturnValue({ ...vi.mocked(useSettings)(), costingsEnabled: false })
     await render()
-    expect(host.textContent).toContain('Enable experimental costings')
-    expect(host.querySelector('form')).toBeNull()
+    expect(host.textContent).not.toContain('Enable experimental costings')
+    expect(host.querySelector('form')).not.toBeNull()
+    expect(useCostings).toHaveBeenCalledWith(true, 'merged', 'models')
+    expect(useInfrastructureOffers).toHaveBeenCalledWith(true)
+    await click('Calculate')
+    expect(host.querySelectorAll('[class*="costValue"]')).toHaveLength(3)
   })
 
   it('disables calculation when the feed has no exact hosted price', async () => {

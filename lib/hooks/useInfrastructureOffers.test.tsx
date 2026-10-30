@@ -59,11 +59,23 @@ it('reports initial failure without inventing any rental or purchase prices', as
   expect(view.state.purchased).toEqual([])
   expect(view.state.error).toBe('Upgrade required')
 })
-it('picks up first provider collection promptly instead of caching startup estimates for an hour', async () => {
+it.each(['unavailable', 'stale', 'unconfigured'] as const)('retries %s source status within a minute', async state => {
   vi.mocked(fetchInfrastructureOffers).mockResolvedValueOnce({ ...TEST_OFFERS,
-    sources: { aws: { state: 'unavailable', last_success: null, message: 'Collection pending' } } })
+    sources: { aws: { state, last_success: null, message: 'Collection pending' } } })
   const view = await harness()
   await act(async () => vi.advanceTimersByTimeAsync(60_000))
   expect(fetchInfrastructureOffers).toHaveBeenCalledTimes(2)
   expect(view.state.sources).toEqual(TEST_OFFERS.sources)
+})
+it('retains an expired cached snapshot on failed re-enable without presenting it as current', async () => {
+  const view = await harness()
+  await view.render(false)
+  expect(view.state.rented).toEqual([])
+  await act(async () => vi.advanceTimersByTimeAsync(CLIENT_CACHE_TTL_MS.costings + 60_000))
+  vi.mocked(fetchInfrastructureOffers).mockRejectedValue(new Error('Offline'))
+  await view.render(true)
+  expect(view.state.rented).toBe(TEST_OFFERS.rented)
+  expect(view.state.purchased).toBe(TEST_OFFERS.purchased)
+  expect(view.state.error).toBe('Offline')
+  expect(view.state.stale).toBe(true)
 })
