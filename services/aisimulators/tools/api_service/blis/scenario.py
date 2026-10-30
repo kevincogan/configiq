@@ -1,4 +1,4 @@
-"""Build request-scoped BLIS v0.13 Scenario and Deployment documents."""
+"""Build request-scoped BLIS Scenario and Deployment documents."""
 
 from __future__ import annotations
 
@@ -13,6 +13,27 @@ from typing import Any
 import yaml
 
 from .manifest import BlisUnsupportedRequest, ModelResolution
+from .runtime import blis_release
+
+#: The vLLM releases BLIS models. Upstream refuses any other engine_version before a
+#: run, so the API refuses it first and names the alternatives in a 422 rather than
+#: letting BLIS's fatal error surface as a 502.
+MODELED_ENGINE_VERSIONS = ("0.29.0", "0.31.0", "0.32.0")
+#: The release a request gets when it names none. 0.31.0 is the newest release that
+#: models prefill/decode disaggregation *and* accepts max_model_len: auto.
+DEFAULT_ENGINE_VERSION = "0.31.0"
+#: What each modeled release can express. 0.32.0 runs blis-vllm's translated vLLM
+#: engine, which models colocated serving only and requires max_model_len stated.
+ENGINE_VERSION_SUPPORT: dict[str, dict[str, bool]] = {
+    "0.29.0": {"disaggregated": True, "max_model_len_auto": True},
+    "0.31.0": {"disaggregated": True, "max_model_len_auto": True},
+    "0.32.0": {"disaggregated": False, "max_model_len_auto": False},
+}
+#: Releases that can run a prefill/decode topology, newest last.
+DISAGGREGATED_ENGINE_VERSIONS = tuple(
+    version for version, support in ENGINE_VERSION_SUPPORT.items() if support["disaggregated"]
+)
+_VERSION_ALIASES = frozenset({"current", "previous", "next"})
 
 _COEFFICIENTS = [
     "cost-model-primitives",
@@ -148,7 +169,18 @@ def _pool_engine(pool: ScenarioPoolRequest) -> dict[str, Any]:
     return engine
 
 
+def disaggregation_refusal(version: str) -> str:
+    """Explain why a release cannot run a prefill/decode topology."""
+    modeled = ", ".join(DISAGGREGATED_ENGINE_VERSIONS)
+    return (
+        f"BLIS {blis_release()} does not model prefill/decode disaggregation for vLLM {version}; "
+        f"use {modeled}, or run a colocated deployment"
+    )
+
+
 def _build_disagg_documents(request: ScenarioRequest) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not engine_version_support(request.engine_version)["disaggregated"]:
+        raise BlisUnsupportedRequest(disaggregation_refusal(request.engine_version))
     prefill = request.prefill_pool
     decode = request.decode_pool
     if prefill is None or decode is None:
@@ -276,11 +308,22 @@ def build_documents(request: ScenarioRequest) -> tuple[dict[str, Any], dict[str,
     moe_quant = _optional_quantization(request.moe_quantization, _WEIGHT_QUANTIZATION, "MoE quantization")
 
     name = _scenario_name(request)
+    # 0.32.0 refuses an `auto` context window; state the same limit the response
+    # reports as applied instead.
+    max_model_len: int | str = (
+        request.max_model_len
+        if request.max_model_len is not None
+        else (
+            "auto"
+            if engine_version_support(request.engine_version)["max_model_len_auto"]
+            else request.isl + request.osl
+        )
+    )
     engine: dict[str, Any] = {
         "block_size": 16,
         "max_num_batched_tokens": request.max_num_batched_tokens or max(8192, request.isl),
         "max_num_seqs": request.max_num_seqs or request.concurrency,
-        "max_model_len": request.max_model_len if request.max_model_len is not None else "auto",
+        "max_model_len": max_model_len,
         "cudagraph_mode": "PIECEWISE",
         "gpu_memory_utilization": (
             request.gpu_memory_utilization
@@ -384,13 +427,36 @@ def write_scenario(directory: str | Path, request: ScenarioRequest) -> str:
     return filename
 
 
-def default_engine_version(backend_version: str | None) -> str:
-    """Use an explicit numeric pin when supplied, otherwise the image's BLIS default."""
-    if backend_version and backend_version.strip():
-        version = backend_version.strip()
-        if version in {"current", "previous", "next"}:
-            raise BlisUnsupportedRequest(
-                "BLIS requires an exact backend_version; it cannot resolve AISimulate version aliases"
-            )
-        return version
-    return os.environ.get("BLIS_ENGINE_VERSION", "0.31.0")
+def engine_version_support(version: str) -> dict[str, bool]:
+    """What BLIS models for ``version``; an unmodeled release supports nothing."""
+    return dict(
+        ENGINE_VERSION_SUPPORT.get(
+            version, {"disaggregated": False, "max_model_len_auto": False}
+        )
+    )
+
+
+def resolve_engine_version(backend_version: str | None) -> str:
+    """Return the vLLM release to simulate, refusing ones BLIS does not model.
+
+    A blank ``backend_version`` means "the image default". An explicit value must be
+    an exact release BLIS models: upstream treats ``engine_version`` as a check, not
+    a selector, so silently substituting a different release would change fidelity
+    without saying so.
+    """
+    version = (
+        (backend_version or "").strip()
+        or os.environ.get("BLIS_ENGINE_VERSION", "").strip()
+        or DEFAULT_ENGINE_VERSION
+    )
+    if version in _VERSION_ALIASES:
+        raise BlisUnsupportedRequest(
+            "BLIS requires an exact backend_version; it cannot resolve AISimulate version aliases"
+        )
+    if version not in ENGINE_VERSION_SUPPORT:
+        modeled = ", ".join(MODELED_ENGINE_VERSIONS)
+        raise BlisUnsupportedRequest(
+            f"BLIS {blis_release()} models vLLM {modeled} only; requested backend_version "
+            f"{version!r}. Leave backend_version blank to use {DEFAULT_ENGINE_VERSION}."
+        )
+    return version

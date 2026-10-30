@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from tools.api_service import app as app_module
 from tools.api_service.app import app
+from tools.api_service.blis.manifest import SupportManifest
 
 client = TestClient(app)
 
@@ -287,6 +288,120 @@ def test_blis_recommend_normalizes_fractional_concurrency_like_aisimulate():
         app_module._blis_recommend(request)
 
     assert run_blis.call_args.args[0].concurrency == 8
+
+
+def _manifest() -> SupportManifest:
+    # A real manifest, not a SimpleNamespace: the catalog endpoints call
+    # supports_hardware()/resolve_* on it, and stubbing the type hides breakage.
+    return SupportManifest(
+        models={
+            "qwen3-32b": {
+                "origin": "aisimulate",
+                "graph": True,
+                "aisimulate_model_id": "Qwen/Qwen3-32B",
+            },
+            "glm-5": {
+                "origin": "upstream",
+                "graph": True,
+                "aisimulate_model_id": "zai-org/GLM-5",
+            },
+            "no-graph": {
+                "origin": "upstream",
+                "graph": False,
+                "aisimulate_model_id": "org/NoGraph",
+            },
+        },
+        skipped=(),
+        hardware=frozenset({"h100", "h200", "a100-sxm"}),
+        networks=frozenset({"ib-400g"}),
+    )
+
+
+def test_backends_endpoint_reports_blis_versions_and_their_support():
+    with patch("tools.api_service.app.blis_release", return_value="0.14.0"):
+        response = client.get("/backends?simulator=blis")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["simulator"] == "blis"
+    assert body["blis_version"] == "0.14.0"
+    backend = body["backends"][0]
+    assert backend["id"] == "vllm"
+    assert backend["versions"] == ["0.29.0", "0.31.0", "0.32.0"]
+    assert backend["default_version"] == "0.31.0"
+    assert backend["memory_fraction"] is None
+    assert backend["systems"] == {}
+    assert backend["system_defaults"] == {}
+    assert backend["disaggregation_requires_fabric"] is True
+    assert backend["version_support"]["0.31.0"] == {
+        "disaggregated": True,
+        "max_model_len_auto": True,
+    }
+    assert backend["version_support"]["0.32.0"] == {
+        "disaggregated": False,
+        "max_model_len_auto": False,
+    }
+
+
+def test_models_endpoint_lists_only_aisimulate_ids_blis_can_price():
+    with patch(
+        "tools.api_service.blis.service.load_support_manifest",
+        return_value=_manifest(),
+    ):
+        response = client.get("/models?simulator=blis")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["simulator"] == "blis"
+    # no-graph has an ID but no derived graph, so BLIS cannot price it.
+    assert body["models"] == ["Qwen/Qwen3-32B", "zai-org/GLM-5"]
+
+
+def test_models_endpoint_accepts_include_specs_for_blis():
+    manifest = _manifest()
+    with (
+        patch("tools.api_service.blis.service.load_support_manifest", return_value=manifest),
+        patch(
+            "tools.api_service.app.get_model_config_from_model_path",
+            return_value={"architecture": "Qwen3ForCausalLM", "num_experts": 0},
+        ),
+    ):
+        response = client.get("/models?simulator=blis&include=specs")
+
+    assert response.status_code == 200
+    model = response.json()["models"][0]
+    assert model["id"] == "Qwen/Qwen3-32B"
+
+
+def test_systems_endpoint_filters_to_hardware_blis_has_a_catalog_chip_for():
+    with (
+        patch("tools.api_service.blis.service.load_support_manifest", return_value=_manifest()),
+        patch("tools.api_service.app.supported_systems", lambda: {"h200_sxm", "b200_sxm"}),
+        patch.dict(
+            "tools.api_service.app._DEVICE_DISPLAY_NAMES",
+            {"h200_sxm": "NVIDIA H200 SXM", "b200_sxm": "NVIDIA B200 SXM"},
+        ),
+    ):
+        response = client.get("/systems?simulator=blis")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["simulator"] == "blis"
+    # b200_sxm has no BLIS hardware entry, so it is not offered by BLIS.
+    assert [system["id"] for system in body["systems"]] == ["h200_sxm"]
+
+
+def test_blis_catalog_endpoints_report_an_unavailable_manifest():
+    with patch(
+        "tools.api_service.blis.service.load_support_manifest",
+        side_effect=app_module.BlisManifestError("manifest missing"),
+    ):
+        models = client.get("/models?simulator=blis")
+        systems = client.get("/systems?simulator=blis")
+
+    assert models.status_code == 503
+    assert models.json()["detail"] == "manifest missing"
+    assert systems.status_code == 503
 
 
 def test_memory_endpoint_ignores_simulator_when_only_aisimulate_is_available():

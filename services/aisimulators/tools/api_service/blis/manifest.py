@@ -122,6 +122,10 @@ class SupportManifest:
             )
         return hardware
 
+    def supports_hardware(self, system: str) -> bool:
+        """Whether this system ID resolves to a catalog chip, without raising."""
+        return any(candidate in self.hardware for candidate in _hardware_candidates(system))
+
     def resolve_network(self, network: str) -> str:
         if network not in self.networks:
             available = ", ".join(sorted(self.networks)) or "none"

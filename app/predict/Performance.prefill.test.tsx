@@ -22,6 +22,7 @@ vi.mock('@/lib/app-config', async (importOriginal) => {
 
 vi.mock('@/lib/hooks/useCatalog', () => ({
   systemMemoryFraction: () => null,
+  engineVersionSupport: () => null,
   useCatalog: () => ({
     gpuOptions: [
       { systemId: 'h200_sxm', displayName: 'NVIDIA H200', vramGb: 141 },
@@ -29,7 +30,28 @@ vi.mock('@/lib/hooks/useCatalog', () => ({
     ],
     modelOptions: ['Qwen/Qwen2.5-7B-Instruct', 'settings/default-model'],
     modelSpecs: new Map(),
+    backendOptions: [],
     networkOptions: ['ib-400g'],
+    simulatorSupport: {
+      blis: {
+        version: '0.14.0',
+        models: ['Qwen/Qwen2.5-7B-Instruct', 'settings/default-model'],
+        systems: ['h200_sxm', 'h100_sxm'],
+        backends: [{
+          id: 'vllm',
+          aisimulateId: 'vllm',
+          versions: ['0.31.0'],
+          defaultVersion: '0.31.0',
+          memoryFraction: null,
+          memoryFractionKind: 'of_total',
+          runtimeField: 'gpu_memory_utilization',
+          systems: {},
+          systemDefaults: {},
+          versionSupport: {},
+          disaggregationRequiresFabric: true,
+        }],
+      },
+    },
     isLoading: false,
   }),
 }));

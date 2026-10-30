@@ -233,8 +233,8 @@ export async function callRecommend(
       )
     }
     externalPayload.search_budget_seconds = blisSearchBudgetSeconds
-    if (request.fabric !== undefined) externalPayload.fabric = request.fabric
   }
+  if (request.fabric !== undefined) externalPayload.fabric = request.fabric
 
   if (request.max_seq_len != null) externalPayload.max_seq_len = request.max_seq_len
   if (request.prefill_max_seq_len != null) externalPayload.prefill_max_seq_len = request.prefill_max_seq_len

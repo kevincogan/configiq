@@ -157,12 +157,13 @@ describe('RecommendRequestSchema', () => {
     if (result.success) expect(result.data).toMatchObject({ simulator: 'blis', fabric: 'ib-400g' })
   })
 
-  it('rejects BLIS-only fabric selection with AISimulate', () => {
+  it('accepts a fabric for any simulator; the simulator API decides support', () => {
     const result = RecommendRequestSchema.safeParse({
       ...VALID_REQUEST,
       fabric: 'ib-400g',
     })
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
+    if (result.success) expect(result.data.fabric).toBe('ib-400g')
   })
 
   it('defaults simulator to aisimulate', () => {
