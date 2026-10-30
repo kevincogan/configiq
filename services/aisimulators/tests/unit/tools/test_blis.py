@@ -499,6 +499,7 @@ def test_recommend_skips_pd_candidates_without_a_fabric(monkeypatch, manifest):
     ))
 
     assert result.search_summary["modes_searched"] == ["agg"]
+    assert result.configs
     assert all(config["mode"] == "agg" for config in result.configs)
     assert all(
         any("P/D candidates were not searched" in warning for warning in config["warnings"])
