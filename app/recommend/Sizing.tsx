@@ -19,7 +19,7 @@ import { fetchModelConfig } from '@/lib/huggingface/fetch-config';
 import { useRecommend } from '@/contexts/RecommendContext';
 import type { RecommendProgressEvent } from '@/lib/api/recommend';
 import { isMoeConfig, type PhaseConfig } from '@/lib/api/recommend';
-import { useCatalog } from '@/lib/hooks/useCatalog';
+import { useCatalog, engineVersionSupport } from '@/lib/hooks/useCatalog';
 import { useSettings } from '@/contexts/SettingsContext';
 import { useCostings, resolveCloudRate } from '@/lib/hooks/useCostings';
 import { getAppConfig } from '@/lib/app-config';
@@ -218,7 +218,24 @@ function friendlyErrorHint(code: string | null): string {
 export default function Sizing() {
   const { hydrated, hfToken, defaultModel: settingsDefaultModel, inferenceBackend, backendVersion, simulator, costingsEnabled, pricingSource, preferredCloudProvider } = useSettings();
   const costings = useCostings(costingsEnabled, pricingSource);
-  const { modelOptions: catalogModels, gpuOptions: catalogGpus, modelSpecs, networkOptions, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
+  const { modelOptions: allCatalogModels, gpuOptions: allCatalogGpus, modelSpecs, networkOptions, simulatorSupport, timeoutSeconds: gatewayTimeout, isLoading: catalogLoading } = useCatalog();
+  // A simulator may price only a subset of the catalog. Its override narrows
+  // the pickers; no override means the top-level catalog is its support.
+  const support = simulatorSupport[simulator];
+  const catalogModels = support?.models ?? allCatalogModels;
+  const catalogGpus = React.useMemo(
+    () => (support
+      ? allCatalogGpus.filter(option => support.systems.includes(option.systemId))
+      : allCatalogGpus),
+    [support, allCatalogGpus],
+  );
+  const engineBackend = support?.backends.find(backend => backend.id === inferenceBackend)
+    ?? support?.backends[0];
+  const engineSupport = engineVersionSupport(engineBackend, backendVersion || engineBackend?.defaultVersion);
+  const disaggSupported = engineSupport?.disaggregated ?? true;
+  // The simulator reports whether a P/D run needs a fabric; AISimulate's P/D
+  // search takes none, so the fabric control stays hidden there.
+  const fabricRequired = engineBackend?.disaggregationRequiresFabric ?? false;
   const MODEL_OPTIONS = catalogModels;
   const [networkFabric, setNetworkFabric] = React.useState<string | null>(null);
   const defaultNetworkFabric = networkOptions.includes('roce-200g') ? 'roce-200g' : '';
@@ -413,7 +430,9 @@ export default function Sizing() {
       // Send the HF config for models AISimulators can't resolve from its catalog.
       ...(needsHfConfig(model, MODEL_OPTIONS) && hfConfig ? { model_config: hfConfig } : {}),
       simulator,
-      ...(simulator === 'blis' ? { fabric: selectedNetworkFabric || null } : {}),
+      // A release without P/D modelling can only search aggregated candidates,
+      // so do not send a fabric that asks for a disaggregated topology.
+      ...(fabricRequired ? { fabric: disaggSupported ? selectedNetworkFabric || null : null } : {}),
     });
   };
 
@@ -467,14 +486,14 @@ export default function Sizing() {
           <GpuSystemInput id="adv-gpu" value={gpuSystem} onChange={setGpuSystem} gpuOptions={catalogGpus} />
         </div>
 
-        {simulator === 'blis' && (
+        {fabricRequired && (
           <div style={{ marginTop: 14, maxWidth: 360 }}>
             <label className={styles.fieldLabel} htmlFor="recommend-network-fabric">Inter-node fabric</label>
             <FormSelect
               id="recommend-network-fabric"
               value={selectedNetworkFabric}
               aria-label="Inter-node fabric"
-              isDisabled={networkOptions.length === 0}
+              isDisabled={networkOptions.length === 0 || !disaggSupported}
               onChange={(_, value) => setNetworkFabric(value)}
             >
               <FormSelectOption value="" label="None (aggregate candidates only)" />
@@ -483,13 +502,15 @@ export default function Sizing() {
               ))}
             </FormSelect>
             <div style={{ fontSize: 13, color: '#3c3f42', marginTop: 4 }}>
-              {networkOptions.length === 0
-                ? 'No network fabrics were returned by the simulator catalog; only aggregate candidates can be searched.'
-                : selectedNetworkFabric === 'roce-200g' && networkFabric === null
-                  ? 'RoCE 200G is preselected; choose another fabric if needed. Select None for aggregate-only search.'
-                  : selectedNetworkFabric
-                    ? 'BLIS searches aggregate and P/D candidates using this fabric.'
-                    : 'No fabric selected; BLIS searches aggregate candidates only.'}
+              {!disaggSupported
+                ? `The selected simulator does not model prefill/decode disaggregation for vLLM ${backendVersion || engineBackend?.defaultVersion}; only aggregate candidates are searched.`
+                : networkOptions.length === 0
+                  ? 'No network fabrics were returned by the simulator catalog; only aggregate candidates can be searched.'
+                  : selectedNetworkFabric === 'roce-200g' && networkFabric === null
+                    ? 'RoCE 200G is preselected; choose another fabric if needed. Select None for aggregate-only search.'
+                    : selectedNetworkFabric
+                      ? 'The simulator searches aggregate and P/D candidates using this fabric.'
+                      : 'No fabric selected; the simulator searches aggregate candidates only.'}
             </div>
           </div>
         )}
@@ -499,7 +520,7 @@ export default function Sizing() {
           <button
             className={styles.calcBtn}
             onClick={handleCalculate}
-             disabled={isLoading || !model.includes('/') || invalidISL || invalidOSL || invalidTTFT || invalidTpot || invalidConcurrency || invalidLatency || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen || (simulator === 'blis' && catalogLoading)}
+             disabled={isLoading || !model.includes('/') || invalidISL || invalidOSL || invalidTTFT || invalidTpot || invalidConcurrency || invalidLatency || invalidMaxSeqLen || invalidPrefillMaxSeqLen || invalidDecodeMaxSeqLen || catalogLoading}
           >
             {isLoading ? 'Calculating...' : 'Calculate'}
           </button>

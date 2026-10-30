@@ -185,6 +185,33 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
 
+  /backends:
+    get:
+      operationId: listBackends
+      tags: [catalog]
+      summary: List backend and engine-version support
+      description: |
+        Returns backend version support and effective memory defaults. With
+        `simulator=blis`, reports the vLLM releases BLIS models, a literal
+        default version (never an AISimulate alias), a `version_support` map per
+        release, empty per-system maps, and `blis_version`.
+      parameters:
+        - name: simulator
+          in: query
+          required: false
+          description: Simulator whose backend support is reported.
+          schema:
+            type: string
+            enum: [aisimulate, blis]
+            default: aisimulate
+      responses:
+        '200':
+          description: Backend list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BackendListResponse'
+
   /models:
     get:
       operationId: listModels
@@ -193,6 +220,8 @@ paths:
       description: |
         Returns supported model identifiers. Without include, returns a sorted list of strings.
         Use include=specs to get per-model metadata (MoE fields, context length, attention heads, architecture).
+
+        With `simulator=blis`, returns only the AISimulate model IDs that BLIS can price.
       parameters:
         - name: include
           in: query
@@ -201,6 +230,14 @@ paths:
           schema:
             type: string
             example: "specs"
+        - name: simulator
+          in: query
+          required: false
+          description: Simulator whose model support is reported.
+          schema:
+            type: string
+            enum: [aisimulate, blis]
+            default: aisimulate
       responses:
         '200':
           description: Model list
@@ -217,6 +254,9 @@ paths:
       description: |
         Returns supported GPU systems. Each entry always includes id and name.
         Use include=specs to add hardware details (memory, TDP, architecture).
+
+        With `simulator=blis`, returns only the systems whose hardware BLIS has a
+        catalog chip for.
       parameters:
         - name: include
           in: query
@@ -225,6 +265,14 @@ paths:
           schema:
             type: string
             example: "specs"
+        - name: simulator
+          in: query
+          required: false
+          description: Simulator whose GPU system support is reported.
+          schema:
+            type: string
+            enum: [aisimulate, blis]
+            default: aisimulate
       responses:
         '200':
           description: System list
@@ -357,7 +405,10 @@ components:
         backend_version:
           type: string
           nullable: true
-          description: Backend version. Null uses the latest available.
+          description: |
+            Backend version. AISimulate: null uses the latest available.
+            BLIS: must be one of the modeled vLLM releases (0.29.0, 0.31.0,
+            0.32.0); null uses 0.31.0. Aliases and unmodeled releases return 422.
           default: null
         target_request_rate:
           type: number
@@ -717,7 +768,10 @@ components:
         backend_version:
           type: string
           nullable: true
-          description: Backend version. Null uses the latest available.
+          description: |
+            Backend version. AISimulate: null uses the latest available.
+            BLIS: must be one of the modeled vLLM releases (0.29.0, 0.31.0,
+            0.32.0); null uses 0.31.0. Aliases and unmodeled releases return 422.
           default: null
         mode:
           type: string
@@ -1109,9 +1163,96 @@ components:
 
     # ── Catalog ────────────────────────────────────────────────────────────
 
+    BackendListResponse:
+      type: object
+      required: [simulator, backends]
+      properties:
+        simulator:
+          type: string
+          enum: [aisimulate, blis]
+        blis_version:
+          type: string
+          nullable: true
+          description: The BLIS release the image was built from. Present when simulator=blis.
+        backends:
+          type: array
+          items:
+            $ref: '#/components/schemas/BackendOption'
+
+    BackendOption:
+      type: object
+      required: [id, versions]
+      properties:
+        id:
+          type: string
+          example: vllm
+        aisimulate_id:
+          type: string
+          description: The corresponding AISimulate backend ID, when the simulator reuses one.
+        versions:
+          type: array
+          description: Engine versions the simulator models.
+          items:
+            type: string
+        default_version:
+          type: string
+          nullable: true
+          description: |
+            The version used when a request omits backend_version. AISimulate reports
+            its per-system namespace (`current`); BLIS reports a literal release.
+        memory_fraction:
+          type: number
+          nullable: true
+          description: Fleet-level default memory fraction, when the simulator defines one.
+        memory_fraction_kind:
+          type: string
+          enum: [of_total, of_free]
+        runtime_field:
+          type: string
+          nullable: true
+        systems:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        system_defaults:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              version:
+                type: string
+                nullable: true
+              memory_fraction:
+                type: number
+                nullable: true
+        disaggregation_requires_fabric:
+          type: boolean
+          description: |
+            Whether a prefill/decode topology needs an inter-node fabric selected
+            before the request is sent. BLIS prices the KV transfer through a named
+            fabric; AISimulate's P/D search takes none.
+        version_support:
+          type: object
+          description: Per-version capabilities. Present when simulator=blis.
+          additionalProperties:
+            type: object
+            properties:
+              disaggregated:
+                type: boolean
+                description: Whether the release can run a prefill/decode topology.
+              max_model_len_auto:
+                type: boolean
+                description: Whether the release accepts max_model_len=auto.
+
     ModelListResponse:
       type: object
+      required: [simulator, models]
       properties:
+        simulator:
+          type: string
+          enum: [aisimulate, blis]
         models:
           type: array
           description: Sorted list of models. Items are strings without include=specs, objects with include=specs.
@@ -1156,7 +1297,11 @@ components:
 
     SystemListResponse:
       type: object
+      required: [simulator, systems]
       properties:
+        simulator:
+          type: string
+          enum: [aisimulate, blis]
         systems:
           type: array
           items:

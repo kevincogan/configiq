@@ -117,7 +117,7 @@ export function RecommendProvider({ children }: { children: React.ReactNode }) {
     if (p.prefix != null && p.prefix > 0) requestBody.prefix = p.prefix;
     if (p.model_config != null) requestBody.model_config = p.model_config;
     if (p.simulator) requestBody.simulator = p.simulator;
-    if (p.simulator === 'blis' && p.fabric !== undefined) requestBody.fabric = p.fabric;
+    if (p.fabric !== undefined) requestBody.fabric = p.fabric;
 
     setParams(p);
     setIsLoading(true);

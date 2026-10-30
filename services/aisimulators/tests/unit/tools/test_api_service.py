@@ -699,6 +699,8 @@ class TestBackends:
         assert backend["default_version"] == "current"
         # The union still advertises every version; only the default namespace moved.
         assert backend["versions"] == ["0.14.0", "0.24.0", "0.26.0", "0.28.0", "0.31.0"]
+        # AISimulate's P/D search takes no fabric, so it must not ask for one.
+        assert backend["disaggregation_requires_fabric"] is False
 
     def test_system_defaults_follow_each_systems_current_slot(self, monkeypatch):
         """The per-system default and its memory fraction must come from the same version."""

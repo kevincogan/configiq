@@ -37,10 +37,13 @@ from aisimulate_core.sdk.utils import get_model_config_from_model_path
 
 from .blis.manifest import BlisManifestError, BlisUnsupportedRequest, load_support_manifest
 from .blis.runner import BlisExecutionError, BlisTimeoutError
+from .blis.runtime import blis_release
+from .blis.scenario import DEFAULT_ENGINE_VERSION, ENGINE_VERSION_SUPPORT, MODELED_ENGINE_VERSIONS
 from .blis.service import EstimateInput as BlisEstimateInput
 from .blis.service import RecommendInput as BlisRecommendInput
 from .blis.service import estimate as run_blis_estimate
 from .blis.service import recommend as run_blis_recommend
+from .blis.service import supported_model_ids, supported_system_ids
 
 # Optional observability + MCP, provided by the shared configiq package
 # (configiq[otel,mcp]). Kept out of the base install/container because otel
@@ -1161,9 +1164,53 @@ app.add_middleware(
 )
 
 
+def _blis_backends() -> dict[str, Any]:
+    """BLIS backend/version support, in the same shape as the AISimulate branch.
+
+    BLIS versions are properties of the BLIS release, not of a GPU system, and BLIS
+    takes no version-scoped memory fraction from the SDK. ``systems`` and
+    ``system_defaults`` are therefore empty rather than filled with invented
+    per-system rows; ``version_support`` is the extra field that lets a client
+    disable a topology the selected release cannot model.
+    ``disaggregation_requires_fabric`` tells a client whether a P/D topology
+    needs an inter-node fabric it must collect from the user first.
+    """
+    return {
+        "simulator": "blis",
+        "blis_version": blis_release(),
+        "backends": [
+            {
+                "id": "vllm",
+                "aisimulate_id": "vllm",
+                "versions": list(MODELED_ENGINE_VERSIONS),
+                # A literal, not AISimulate's `current` alias: BLIS refuses aliases.
+                "default_version": DEFAULT_ENGINE_VERSION,
+                "memory_fraction": None,
+                "memory_fraction_kind": "of_total",
+                "runtime_field": "gpu_memory_utilization",
+                "systems": {},
+                "system_defaults": {},
+                # A P/D run transfers KV between pools, and BLIS prices that
+                # transfer through a named fabric, so the request must choose one.
+                "disaggregation_requires_fabric": True,
+                "version_support": {
+                    version: dict(support) for version, support in ENGINE_VERSION_SUPPORT.items()
+                },
+            }
+        ],
+    }
+
+
 @app.get("/backends")
-def get_backends():
+def get_backends(
+    simulator: Literal["aisimulate", "blis"] = Query(
+        default="aisimulate",
+        description="Simulator whose backend and version support is reported.",
+    ),
+):
     """Return backend/version support and effective memory defaults."""
+    if simulator == "blis":
+        return _blis_backends()
     supported = get_supported_databases()
     backend_data: dict[str, dict[str, Any]] = {}
     for system, systems_backends in supported.items():
@@ -1223,8 +1270,10 @@ def get_backends():
                 }
                 for system, version in system_defaults.items()
             },
+            # AISimulate's P/D search takes no fabric; no extra input is needed.
+            "disaggregation_requires_fabric": False,
         })
-    return {"backends": result}
+    return {"simulator": "aisimulate", "backends": result}
 
 
 @app.on_event("startup")
@@ -1683,24 +1732,38 @@ def _model_specs(model_id: str) -> dict:
 @app.get("/models")
 def get_models(
     include: str | None = Query(default=None, examples=["specs"], description="Comma-separated extras: specs."),
+    simulator: Literal["aisimulate", "blis"] = Query(
+        default="aisimulate",
+        description="Simulator whose model support is reported.",
+    ),
 ):
     """List supported models."""
-    models = sorted(get_default_models())
-    if include and "specs" in _parse_include(include):
-        return {"models": [_model_specs(m) for m in models]}
-    return {"models": models}
-
-
-@app.get("/systems")
-def get_systems(
-    include: str | None = Query(default=None, examples=["specs"], description="Comma-separated extras: specs."),
-):
-    """List supported GPU systems."""
     includes = _parse_include(include)
-    want_specs = "specs" in includes
+    if simulator == "blis":
+        # Only the AISimulate IDs BLIS can price. The picker offers AISimulate IDs, so
+        # a catalog-only model would be a dead option here.
+        try:
+            models = supported_model_ids()
+        except BlisManifestError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+    else:
+        models = sorted(get_default_models())
+    if "specs" in includes:
+        return {"simulator": simulator, "models": [_model_specs(m) for m in models]}
+    return {"simulator": simulator, "models": models}
+
+
+def _system_entries(simulator: Literal["aisimulate", "blis"], *, want_specs: bool) -> list[dict[str, Any]]:
+    """Catalog entries for the requested simulator, in the /systems shape."""
+    system_ids = sorted(supported_systems())
+    if simulator == "blis":
+        try:
+            system_ids = supported_system_ids(system_ids)
+        except BlisManifestError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     systems = []
-    for sys_id in sorted(supported_systems()):
+    for sys_id in system_ids:
         device_name = _DEVICE_DISPLAY_NAMES.get(sys_id)
         if device_name is None:
             # No perf-data display name -> no benchmark data; hide it.
@@ -1732,7 +1795,23 @@ def get_systems(
             except Exception:
                 logger.warning("failed to load spec for %s", sys_id)
         systems.append(entry)
-    return {"systems": systems}
+    return systems
+
+
+@app.get("/systems")
+def get_systems(
+    include: str | None = Query(default=None, examples=["specs"], description="Comma-separated extras: specs."),
+    simulator: Literal["aisimulate", "blis"] = Query(
+        default="aisimulate",
+        description="Simulator whose GPU system support is reported.",
+    ),
+):
+    """List supported GPU systems."""
+    includes = _parse_include(include)
+    return {
+        "simulator": simulator,
+        "systems": _system_entries(simulator, want_specs="specs" in includes),
+    }
 
 
 @app.get("/networks")

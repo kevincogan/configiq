@@ -6,6 +6,7 @@ import math
 import os
 import tempfile
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,12 +19,14 @@ from .manifest import (
     load_support_manifest,
 )
 from .runner import BlisExecutionError, RunRequest, run_blis
-from .runtime import BlisRuntime, resolve_runtime
+from .runtime import BlisRuntime, blis_release, resolve_runtime
 from .scenario import (
     ScenarioPoolRequest,
     ScenarioRequest,
-    default_engine_version,
+    disaggregation_refusal,
+    engine_version_support,
     normalize_weight_quantization,
+    resolve_engine_version,
     write_scenario,
 )
 
@@ -166,13 +169,14 @@ def _resolve_request(model_path: str, system: str, backend: str, backend_version
         model=model,
         hardware=hardware,
         gpus_per_node=gpus_per_node,
-        engine_version=default_engine_version(backend_version),
+        engine_version=resolve_engine_version(backend_version),
     )
 
 
 def _provenance(resolved: _ResolvedRequest, model_path: str, system: str) -> dict[str, str | None]:
     return {
         "simulator": "blis",
+        "blis_version": blis_release(),
         "requested_model": model_path,
         "resolved_model": resolved.model.catalog_name,
         "model_source": resolved.model.origin,
@@ -183,11 +187,43 @@ def _provenance(resolved: _ResolvedRequest, model_path: str, system: str) -> dic
     }
 
 
+def _require_disaggregation(resolved: _ResolvedRequest) -> None:
+    """Refuse a P/D topology before a run when the release cannot model one."""
+    if not engine_version_support(resolved.engine_version)["disaggregated"]:
+        raise BlisUnsupportedRequest(disaggregation_refusal(resolved.engine_version))
+
+
+def supported_model_ids(manifest: SupportManifest | None = None) -> list[str]:
+    """AISimulate model IDs BLIS can price, for the catalog endpoints.
+
+    Only entries a picker can actually offer are listed: an upstream catalog model
+    with no AISimulate ID is reachable by its catalog name, but ConfigIQ never
+    offers that name, so advertising it would be a dead option.
+    """
+    manifest = manifest or load_support_manifest()
+    return sorted(
+        entry["aisimulate_model_id"]
+        for entry in manifest.models.values()
+        if entry.get("graph") is True and isinstance(entry.get("aisimulate_model_id"), str)
+    )
+
+
+def supported_system_ids(systems: Iterable[str], manifest: SupportManifest | None = None) -> list[str]:
+    """The subset of ``systems`` whose hardware BLIS has a catalog chip for."""
+    manifest = manifest or load_support_manifest()
+    return [system for system in systems if manifest.supports_hardware(system)]
+
+
 def _model_warnings(resolved: _ResolvedRequest, *, model_config_provided: bool = False) -> list[str]:
     warnings: list[str] = []
     relation = resolved.model.config_relation
     if relation and relation != "identical":
         warnings.append(f"The selected simulator uses a model configuration marked {relation}.")
+    if resolved.model.origin == "aisimulate":
+        warnings.append(
+            "BLIS priced this model from a catalog entry derived at image build time "
+            "from the AISimulate model configuration."
+        )
     if model_config_provided:
         warnings.append("The selected simulator used its resolved catalog model; the supplied model_config was not applied.")
     return warnings
@@ -478,6 +514,7 @@ def estimate(request: EstimateInput) -> BlisPrediction:
         if not request.fabric:
             raise BlisUnsupportedRequest("BLIS disaggregated predictions require an explicit fabric")
         resolved = _resolve_request(request.model_path, request.system, request.backend, request.backend_version)
+        _require_disaggregation(resolved)
         return _estimate_disagg(request, resolved)
     resolved = _resolve_request(request.model_path, request.system, request.backend, request.backend_version)
     if request.prefix > 0 and request.prefix_caching is False:
@@ -605,6 +642,8 @@ def recommend(request: RecommendInput) -> BlisRecommendation:
     concurrency = request.concurrency or 1
     resolved = _resolve_request(request.model_path, request.system, request.backend, request.backend_version)
     include_disagg = bool(request.fabric)
+    if include_disagg:
+        _require_disaggregation(resolved)
     fabric = resolved.manifest.resolve_network(request.fabric) if request.fabric else None
     hardware_max = resolved.gpus_per_node * (2 if include_disagg else 1)
     upper = min(request.max_candidate_gpus or hardware_max, hardware_max)

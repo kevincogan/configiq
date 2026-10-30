@@ -25,7 +25,12 @@ export function Settings() {
     simulator, setSimulator,
     costingsEnabled, setCostingsEnabled,
   } = useSettings();
-  const { modelOptions, backendOptions, isLoading: catalogLoading } = useCatalog();
+  const { modelOptions, backendOptions, simulatorSupport, isLoading: catalogLoading } = useCatalog();
+  const support = simulatorSupport[simulator];
+  const selectedBackend = support
+    ? support.backends.find(b => b.id === inferenceBackend) ?? support.backends[0]
+    : backendOptions.find(b => b.id === inferenceBackend);
+  const modelChoices = support?.models ?? modelOptions;
 
   const [localModel, setLocalModel] = React.useState('');
   const [modelStatus, setModelStatus] = React.useState<ModelStatus>('idle');
@@ -64,7 +69,7 @@ export function Settings() {
     if (!localModel || !localModel.includes('/')) { setModelStatus('idle'); return; }
     const timer = setTimeout(() => {
       if (getAppConfig().testedModels.includes(localModel)) { setModelStatus('supported'); return; }
-      const inCatalog = modelOptions.includes(localModel);
+      const inCatalog = modelChoices.includes(localModel);
       if (inCatalog) { setModelStatus('catalog'); return; }
       setModelStatus('fetching');
       fetchModelConfig(localModel, hfToken).then(r => {
@@ -72,7 +77,7 @@ export function Settings() {
       });
     }, 500);
     return () => clearTimeout(timer);
-  }, [localModel, hfToken, modelOptions, catalogLoading, hydrated]);
+  }, [localModel, hfToken, modelChoices, catalogLoading, hydrated]);
 
   const handleTokenChange = (v: string) => {
     setHfToken(v);
@@ -99,8 +104,6 @@ export function Settings() {
     setBackendSaved(true);
     setTimeout(() => setBackendSaved(false), 3000);
   };
-
-  const selectedBackend = backendOptions.find(b => b.id === inferenceBackend);
 
   return (
     <div className={styles.page}>
@@ -316,13 +319,19 @@ export function Settings() {
                 />
               </div>
             </div>
-            {selectedBackend && (
+            {selectedBackend ? (
               <div className={styles.helperText}>
                 {selectedBackend.versions.length > 0
-                  ? `Supported versions: ${selectedBackend.versions.join(', ')}. Leave blank to use each system's default.`
-                  : 'No versions reported by AISimulators'}
+                  ? support
+                    ? `Supported versions: ${selectedBackend.versions.join(', ')}. Leave blank to use the simulator's default (${selectedBackend.defaultVersion ?? 'its own default'}).`
+                    : `Supported versions: ${selectedBackend.versions.join(', ')}. Leave blank to use each system's default.`
+                  : 'No versions reported by the server'}
               </div>
-            )}
+            ) : support && !catalogLoading ? (
+              <div className={styles.helperText}>
+                The server did not report backend support for this simulator. Predictions will be rejected.
+              </div>
+            ) : null}
           </div>
         </div>
         {/* ── Costings features ── */}
